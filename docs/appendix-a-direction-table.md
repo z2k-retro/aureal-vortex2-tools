@@ -12,7 +12,7 @@ The table was read out of the driver by placing one A3D source at known directio
 - **Interpolation.** For any other direction the driver blends the four surrounding entries bilinearly in azimuth and elevation, taps and ITD alike. Run 12 checked 351 positions on a 3.75° grid in three regions (around the front, below and to the right, and above and behind): all matched bilinear interpolation to within rounding (0.05%).
 - **Straight up** gives the same taps at every azimuth.
 - **Distance** does not change the taps or ITD; it is handled by the gain and the atmospheric filter.
-- **180°** is an outlier at every elevation: about twice the tap energy of its neighbours, and a 40-sample left-ear ITD from −15° to +30°. Directions from 165° to 195° interpolate toward it.
+- **Exactly 180°** is a special case. A source placed exactly behind gets taps 3–9 times the amplitude of its neighbours and a large one-ear ITD (up to 40 samples), repeatably. But directions even 1° away are blended from an ordinary 180° entry with zero ITD, which can be reconstructed from the 175° and 185° readings (both sides agree to 0.1%). When reading the table out, rebuild the 180° entries that way rather than using the exactly-180° capture. `hrtf_extract.py` reports exactly-180° rows as captured.
 
 ## Coordinates and units
 
