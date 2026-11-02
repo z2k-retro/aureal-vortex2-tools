@@ -1,0 +1,8 @@
+bin/
+*.o
+*.exe
+*.iso
+*.img
+__pycache__/
+traces/
+tools/a3dtest/a3d-sdk/
