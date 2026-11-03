@@ -20,6 +20,7 @@
  *   run3 = sync elev5 tcsweep (tcsweep is meant to run alongside vortex-poke.py tcsweep on the host)
  *   run12 = sync srcresp level midi hrtfgrid: converter response, levels and headroom, the MIDI
  *           synthesiser, and directions between the 15-degree table points (about 9 minutes)
+ *   run13 = sync reflhf: reflection tone and level against wall reflectance (about 70 s)
  * Log: A3DTEST.LOG on the first writable hard disk other than C: (or C:\ if none).
  */
 
@@ -1132,6 +1133,46 @@ static void t_hrtfgrid(void) {
     logmsg("TEST hrtfgrid end");
 }
 
+
+/* run 13: the reflection voice's tone and level. One click source 4 m ahead, one wall
+   4 m to the right, so the echo arrives about 14 ms after the click, well clear of it;
+   high- then low-frequency reflectance stepped, 4 s per step, no-wall references at
+   both ends. */
+static void t_reflhf(void) {
+    static const double hf[] = { 1.0, 0.75, 0.5, 0.35, 0.25, 0.15, 0.1, 0.05, 0.0 };
+    static const double lf[] = { 0.75, 0.5, 0.35, 0.25, 0.1 };
+    SRC s = {0}; int i, n = 0;
+    logmsg("TEST reflhf begin (headphones, click, front r=4 m, wall right d=4 m, 4 s per step)");
+    headphones();
+    s.src = new_source(0, STIM_CLICK, 48000, 1, 16, 1.0);
+    if (!s.src) return;
+    IA3dMaterial_SetTransmittance(mat, 0.0f, 0.0f);
+    IA3dGeom_Enable(geom, A3D_1ST_REFLECTIONS);
+    IA3dGeom_SetReflectionDelayScale(geom, 1.0f); IA3dGeom_SetReflectionGainScale(geom, 1.0f);
+    IA3dSource_Play(s.src, A3D_LOOPED);
+    place(&s, 0, 0, 4.0);
+    g_wall = WALL_NONE; g_wall_d = 4.0;
+    L_begin(); L_s("STEP reflhf n="); L_i(n++); L_s(" walls=none"); L_end(); hold(&s, 1, 4000);
+    g_wall = WALL_RIGHT;
+    for (i = 0; i < 9; i++) {
+        IA3dMaterial_SetReflectance(mat, 1.0f, (A3DVAL)hf[i]);
+        L_begin(); L_s("STEP reflhf n="); L_i(n++); L_s(" walls=right d=4"); L_kv("refl_low", 1.0, 2); L_kv("refl_high", hf[i], 2); L_end();
+        hold(&s, 1, 4000);
+    }
+    for (i = 0; i < 5; i++) {
+        IA3dMaterial_SetReflectance(mat, (A3DVAL)lf[i], 1.0f);
+        L_begin(); L_s("STEP reflhf n="); L_i(n++); L_s(" walls=right d=4"); L_kv("refl_low", lf[i], 2); L_kv("refl_high", 1.0, 2); L_end();
+        hold(&s, 1, 4000);
+    }
+    g_wall = WALL_NONE;
+    L_begin(); L_s("STEP reflhf n="); L_i(n++); L_s(" walls=none"); L_end(); hold(&s, 1, 4000);
+    IA3dGeom_Disable(geom, A3D_1ST_REFLECTIONS);
+    IA3dMaterial_SetTransmittance(mat, 1.0f, 1.0f);
+    IA3dMaterial_SetReflectance(mat, 0.0f, 0.0f);
+    kill_source(&s);
+    logmsg("TEST reflhf end");
+}
+
 /* ------------------------------------------------------------------ main */
 typedef void (*TESTFN)(void);
 static const struct { const char *name; TESTFN fn; } tests[] = {
@@ -1140,7 +1181,7 @@ static const struct { const char *name; TESTFN fn; } tests[] = {
     {"occlusion", t_occlusion}, {"reflections", t_reflections}, {"glide", t_glide},
     {"xtalk", t_xtalk}, {"ref", t_ref}, {"hrtfmap", t_hrtfmap}, {"glide2", t_glide2}, {"reflect2", t_reflect2},
     {"multi", t_multi}, {"dsound", t_dsound}, {"elev5", t_elev5}, {"tcsweep", t_tcsweep}, {"click90", t_click90}, {"noise2d", t_noise2d}, {"wtpath", t_wtpath},
-    {"srcresp", t_srcresp}, {"midi", t_midi}, {"level", t_level}, {"hrtfgrid", t_hrtfgrid},
+    {"srcresp", t_srcresp}, {"midi", t_midi}, {"level", t_level}, {"hrtfgrid", t_hrtfgrid}, {"reflhf", t_reflhf},
 };
 /* default (no arguments): the run-2 suite */
 static const char *suite2[] = { "xtalk", "ref", "hrtfmap", "glide2", "reflect2", "multi", "dsound" };
@@ -1204,6 +1245,7 @@ void entry(void) {
         if (seq(tok, "all")) { for (i = 0; i < NTESTS; i++) tests[i].fn(); }
         else if (seq(tok, "v1")) { for (i = 0; i < 12; i++) tests[i].fn(); }
         else if (seq(tok, "run3")) { t_sync(); run_named("elev5"); run_named("tcsweep"); }
+        else if (seq(tok, "run13")) { t_sync(); t_reflhf(); }
         else if (seq(tok, "run12")) { t_sync(); t_srcresp(); t_level(); t_midi(); t_hrtfgrid(); }
         else run_named(tok);
         ran = 1;
