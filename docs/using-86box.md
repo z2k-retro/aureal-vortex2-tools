@@ -19,6 +19,7 @@ Windows builds are on the [releases page](https://github.com/z2k-retro/86Box/rel
 | --- | --- | --- |
 | Mix rear channels into the stereo output | Off | The SQ2500 has a second (rear) output. 86Box plays stereo, so in quad mode the rear channels are lost unless this is on. Turn it on if you set the control panel to four speakers but listen in stereo |
 | Write diagnostic log | Off | Writes `vortex2.log` in the machine's folder: a status line every two seconds plus stream, routing and 3D-source events. Use it when reporting a problem |
+| Write register trace | Off | Writes `vortex2-trace.txt` (every register access, in the format of the real-card sessions) and `vortex2-dma.bin` (every block of sample data the chip fetched) in the machine's folder. `bin/v2replay -d` replays them offline into the model, reproducing the audio exactly, with any one source soloed. The files grow by tens of megabytes a minute, so turn it on only for a short run |
 
 ## What is emulated
 

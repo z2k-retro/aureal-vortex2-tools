@@ -96,7 +96,7 @@ bin/v2replay -a -v -t 60 TIMELINE     # compare every read for the first minute,
 bin/v2replay -o out.raw TIMELINE      # also write the model's output (48 kHz, stereo, s16)
 ```
 
-The trace holds no guest memory, so the replay feeds DMA a fixed noise pattern; the output shows how the chip routes and processes streams, not what was played. With `-a`, position and status registers differ because the replay does not follow the guest's timing, and memory regions the driver never writes differ because they power up random; the rest should match.
+The trace holds no guest memory, so the replay feeds DMA a fixed noise pattern; the output shows how the chip routes and processes streams, not what was played. A session traced in 86Box instead (the device's register-trace setting) also records the fetched sample data, and `-d vortex2-dma.bin` plays that back, so the replay reproduces the emulator's audio exactly; `-s a6,a7` then writes one source pair (here 3D slice 0's outputs) instead of the mix, to hear each path on its own. With `-a`, position and status registers differ because the replay does not follow the guest's timing, and memory regions the driver never writes differ because they power up random; the rest should match.
 
 For audio comparisons, record the same test in the emulator (86Box's application audio capture, or the diagnostic log described in [using-86box.md](using-86box.md)) and compare with the session's `audio.wav`. The comparisons in the reference compare recordings with each other (for example each converter rate against 48 kHz), so the line input's own response drops out.
 
