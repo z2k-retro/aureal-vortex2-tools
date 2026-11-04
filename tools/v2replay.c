@@ -47,28 +47,51 @@ static uint64_t frames;
 static uint16_t codec[64];
 static int      show_log;
 static uint8_t *dma_log;
-static size_t   dma_len, dma_pos;
+static size_t   dma_len;
+static size_t  *dma_off;   /* offset of each record */
+static uint8_t *dma_used;
+static size_t   dma_n, dma_first; /* records, and the first one not yet served */
 static long     dma_hits, dma_misses;
 
-/* Serve a fetch from the recorded data: the next record normally matches;
-   otherwise look a little way ahead (the replay's block timing can differ
-   from the recording's by one fetch), else fall back to noise. */
+static void
+dma_index(void)
+{
+    size_t p = 0, cap = 1024;
+    dma_off = malloc(cap * sizeof(size_t));
+    while (p + 8 <= dma_len) {
+        uint32_t rl;
+        memcpy(&rl, dma_log + p + 4, 4);
+        if (p + 8 + rl > dma_len)
+            break;
+        if (dma_n == cap)
+            dma_off = realloc(dma_off, (cap *= 2) * sizeof(size_t));
+        dma_off[dma_n++] = p;
+        p += 8 + rl;
+    }
+    dma_used = calloc(dma_n, 1);
+}
+
+/* Serve a fetch from the recorded data. The streams' fetches interleave
+   slightly differently when the replay's block timing differs from the
+   recording's, so look ahead a little from the first unserved record;
+   records passed over stay available for the other streams. */
 static int
 dma_serve(uint32_t addr, uint8_t *buf, uint32_t len)
 {
-    size_t p = dma_pos;
-    for (int tries = 0; tries < 256 && p + 8 <= dma_len; tries++) {
+    while (dma_first < dma_n && dma_used[dma_first])
+        dma_first++;
+    for (size_t i = dma_first, tries = 0; i < dma_n && tries < 4096; i++) {
+        if (dma_used[i])
+            continue;
+        tries++;
         uint32_t ra, rl;
-        memcpy(&ra, dma_log + p, 4);
-        memcpy(&rl, dma_log + p + 4, 4);
-        if (p + 8 + rl > dma_len)
-            return 0;
+        memcpy(&ra, dma_log + dma_off[i], 4);
+        memcpy(&rl, dma_log + dma_off[i] + 4, 4);
         if (ra == addr && rl == len) {
-            memcpy(buf, dma_log + p + 8, len);
-            dma_pos = p + 8 + rl;
+            memcpy(buf, dma_log + dma_off[i] + 8, len);
+            dma_used[i] = 1;
             return 1;
         }
-        p += 8 + rl;
     }
     return 0;
 }
@@ -163,6 +186,7 @@ main(int argc, char **argv)
             return 2;
         }
         fclose(d);
+        dma_index();
     }
     FILE *f = fopen(argv[optind], "r");
     if (!f) {
