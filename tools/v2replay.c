@@ -15,6 +15,11 @@
  *                  because the replay does not follow the guest's timing)
  *     -v           print each mismatch (up to 400), not just the summary
  *     -l           print the model's diagnostic log
+ *     -d FILE      take the stream data from a vortex2-dma.bin written by the
+ *                  86Box device (its trace option), so the output is the
+ *                  audio the game played rather than noise
+ *     -s SRC[,SRC] write one ADB source (hex) instead of the mixed output,
+ *                  e.g. -s a6,a7 for 3D slice 0 or -s 7e,7f for the EQ
  *
  * The trace holds no guest memory, so DMA reads return a fixed noise pattern;
  * the audio shows what the chip does with a stream, not what the game played.
@@ -41,11 +46,44 @@ static double   now_t;
 static uint64_t frames;
 static uint16_t codec[64];
 static int      show_log;
+static uint8_t *dma_log;
+static size_t   dma_len, dma_pos;
+static long     dma_hits, dma_misses;
+
+/* Serve a fetch from the recorded data: the next record normally matches;
+   otherwise look a little way ahead (the replay's block timing can differ
+   from the recording's by one fetch), else fall back to noise. */
+static int
+dma_serve(uint32_t addr, uint8_t *buf, uint32_t len)
+{
+    size_t p = dma_pos;
+    for (int tries = 0; tries < 256 && p + 8 <= dma_len; tries++) {
+        uint32_t ra, rl;
+        memcpy(&ra, dma_log + p, 4);
+        memcpy(&rl, dma_log + p + 4, 4);
+        if (p + 8 + rl > dma_len)
+            return 0;
+        if (ra == addr && rl == len) {
+            memcpy(buf, dma_log + p + 8, len);
+            dma_pos = p + 8 + rl;
+            return 1;
+        }
+        p += 8 + rl;
+    }
+    return 0;
+}
 
 static void
 mem_read(void *p, uint32_t addr, uint8_t *buf, uint32_t len)
 {
     (void) p;
+    if (dma_log) {
+        if (dma_serve(addr, buf, len)) {
+            dma_hits++;
+            return;
+        }
+        dma_misses++;
+    }
     for (uint32_t i = 0; i < len; i++) {
         uint32_t a = addr + i, h = (a >> 1) * 2654435761u;
         h ^= h >> 15;
@@ -84,25 +122,47 @@ deterministic(uint32_t a)
 int
 main(int argc, char **argv)
 {
-    const char *outname = NULL;
+    const char *outname = NULL, *dmaname = NULL;
     double      tmax    = 1e30;
-    int         all = 0, verbose = 0, opt;
+    int         all = 0, verbose = 0, opt, solo[2] = { -1, -1 };
+    const char *usage = "usage: v2replay [-o out.raw] [-t seconds] [-a] [-v] [-l] [-d dma.bin] [-s src[,src]] TIMELINE\n";
 
-    while ((opt = getopt(argc, argv, "o:t:avl")) != -1) {
+    while ((opt = getopt(argc, argv, "o:t:avld:s:")) != -1) {
         switch (opt) {
             case 'o': outname = optarg; break;
             case 't': tmax = atof(optarg); break;
             case 'a': all = 1; break;
             case 'v': verbose = 1; break;
             case 'l': show_log = 1; break;
+            case 'd': dmaname = optarg; break;
+            case 's':
+                solo[0] = (int) strtol(optarg, NULL, 16);
+                solo[1] = strchr(optarg, ',') ? (int) strtol(strchr(optarg, ',') + 1, NULL, 16) : solo[0];
+                break;
             default:
-                fprintf(stderr, "usage: v2replay [-o out.raw] [-t seconds] [-a] [-v] [-l] TIMELINE\n");
+                fputs(usage, stderr);
                 return 2;
         }
     }
     if (optind >= argc) {
-        fprintf(stderr, "usage: v2replay [-o out.raw] [-t seconds] [-a] [-v] [-l] TIMELINE\n");
+        fputs(usage, stderr);
         return 2;
+    }
+    if (dmaname) {
+        FILE *d = fopen(dmaname, "rb");
+        if (!d) {
+            perror(dmaname);
+            return 2;
+        }
+        fseek(d, 0, SEEK_END);
+        dma_len = (size_t) ftell(d);
+        fseek(d, 0, SEEK_SET);
+        dma_log = malloc(dma_len);
+        if (!dma_log || fread(dma_log, 1, dma_len, d) != dma_len) {
+            fprintf(stderr, "could not load %s\n", dmaname);
+            return 2;
+        }
+        fclose(d);
     }
     FILE *f = fopen(argv[optind], "r");
     if (!f) {
@@ -154,9 +214,12 @@ main(int argc, char **argv)
             frames += V2_BLOCK;
             now_t += block_dt;
             if (o) {
+                const float *sl = solo[0] >= 0 ? v2_debug_source(c, solo[0]) : NULL;
+                const float *sr = solo[0] >= 0 ? v2_debug_source(c, solo[1]) : NULL;
                 for (int n = 0; n < V2_BLOCK; n++)
                     for (int k = 0; k < 2; k++) {
-                        int s = (int) lrintf((out[n * 4 + k] + out[n * 4 + 2 + k]) * 32768.0f);
+                        float v = sl ? (k ? sr[n] : sl[n]) : out[n * 4 + k] + out[n * 4 + 2 + k];
+                        int   s = (int) lrintf(v * 32768.0f);
                         pcm[n * 2 + k] = (int16_t) (s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
                     }
                 fwrite(pcm, sizeof pcm, 1, o);
@@ -188,6 +251,8 @@ main(int argc, char **argv)
 
     printf("%ld writes, %ld reads, %.1f s replayed; %ld reads compared, %ld differ\n",
            nw, nr, now_t, compared, mismatches);
+    if (dma_log)
+        printf("stream data: %ld fetches from the recording, %ld not found (noise)\n", dma_hits, dma_misses);
     if (mismatches) {
         printf("registers that differ most often:\n");
         for (int k = 0; k < 12; k++) {
