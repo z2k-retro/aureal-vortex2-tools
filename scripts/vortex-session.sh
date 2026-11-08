@@ -29,6 +29,9 @@
 #   TRACES       session folders go here [~/traces]
 #   PARSER       vortex_trace.py, run on the log afterwards [../tools/vortex_trace.py]
 #   PERSIST=1    keep disk changes (drops -snapshot) [off]
+#   VGA          cirrus, or voodoo3 for the emulated Voodoo3 (needs a QEMU built with
+#                the QEmu-3Dfx-Voodoo-3-Port device, set with QEMU=) [cirrus]
+#   V3ROM        Voodoo3 3000 video BIOS for VGA=voodoo3 [~/roms/3k12sd.rom]
 
 set -u
 
@@ -41,6 +44,8 @@ EXTRA_CD=${EXTRA_CD:-}
 TRACES=${TRACES:-$HOME/traces}
 PARSER=${PARSER:-$(cd "$(dirname "$0")/../tools" && pwd)/vortex_trace.py}
 PERSIST=${PERSIST:-0}
+VGA=${VGA:-cirrus}
+V3ROM=${V3ROM:-$HOME/roms/3k12sd.rom}
 CURRENT_LINK="$TRACES/current"
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -173,6 +178,13 @@ preflight() {
     [ -e "/sys/bus/pci/devices/$HOSTDEV/driver" ] && drv=$(basename "$(readlink -f "/sys/bus/pci/devices/$HOSTDEV/driver")")
     [ "$drv" = vfio-pci ] || die "$HOSTDEV is bound to '${drv:-nothing}', not vfio-pci (sudo driverctl set-override $HOSTDEV vfio-pci)"
     [ -z "$EXTRA_CD" ] || [ -f "$EXTRA_CD" ] || die "EXTRA_CD not found: $EXTRA_CD"
+    case "$VGA" in
+        cirrus) ;;
+        voodoo3) [ -f "$V3ROM" ] || die "Voodoo3 BIOS not found at $V3ROM (set V3ROM=...)"
+                 "$QEMU" -device help 2>/dev/null | grep -q '"voodoo3"' \
+                     || die "$QEMU has no voodoo3 device (set QEMU= to the Voodoo3 build)" ;;
+        *) die "VGA must be cirrus or voodoo3" ;;
+    esac
     [ -z "${EXTRA_DISK:-}" ] || [ -f "$EXTRA_DISK" ] || die "EXTRA_DISK not found: $EXTRA_DISK"
     rec_tool >/dev/null
     if pgrep -af 'qemu-system' >/dev/null; then
@@ -196,7 +208,7 @@ cmd_run() {
 
     local args=(
         -machine pc,hpet=off -accel "$ACCEL" -cpu pentium3 -m 256
-        -rtc base=localtime -vga cirrus -display sdl -nic none
+        -rtc base=localtime -display sdl -nic none
         -drive "file=$DISK,format=qcow2,if=ide"
         -device "vfio-pci,host=$HOSTDEV,x-no-mmap=on"
         -trace vfio_region_write -trace vfio_region_read
@@ -204,6 +216,12 @@ cmd_run() {
         -monitor stdio
         -qmp "unix:$TRACES/qmp.sock,server=on,wait=off"
     )
+    # Fixed PCI slot for the Voodoo3, so Windows sees the same device every run
+    if [ "$VGA" = voodoo3 ]; then
+        args+=(-vga none -device "voodoo3,model=3,legacy-vga=on,romfile=$V3ROM,addr=0x05")
+    else
+        args+=(-vga cirrus)
+    fi
     [ "$PERSIST" = 1 ] || args+=(-snapshot)
     [ -n "$EXTRA_CD" ] && args+=(-cdrom "$EXTRA_CD")
     [ -n "${EXTRA_DISK:-}" ] && args+=(-drive "file=$EXTRA_DISK,format=raw,if=ide,index=1,snapshot=off")
