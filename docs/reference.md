@@ -460,6 +460,17 @@ So Half-Life's second-half voices 4–29 are neither reflections nor A3D overflo
 
 **Voice output routing (Strong, from the emulator).** A voice whose own ADB source (`0x40` + voice for the first half, `0x80` + voice for the second) appears in the route table plays only into that route, not into the half's mixed outputs (`WT0_32/33` and so on). `DSREG` (`0x0008` in each half) was 0 in every trace, so it cannot be what selects this. Modelling it this way was what made Half-Life's 3D sounds come out in the right places in 86Box: before the change, voices feeding A3D sources also leaked into the plain stereo mix.
 
+### Game note: SiN's dropped dialogue and its "reverb engine" (Strong)
+
+SiN with 3D audio on and its reverb engine off drops about every other line of dialogue in the opening cutscene, and cuts other sounds short. Traces of the same scene on the real card (X79 session `20261108-235104-sin-opening2`, SiN 1.00) and in 86Box show the same thing: the game starts and stops its sounds in the same order with the same timing on both, and for the missing lines it never starts a stream at all. During those gaps only the main 2D stream was running; ten or more ADB channels were idle. So the card did not run out of voices, and the emulator matches the hardware. The fault is in the game.
+
+Turning on SiN's reverb engine (SiN 1.11, 86Box) brings the lines back. It is SiN's own feature, not something on the card: the reverb-on trace writes to no register area that the other runs do not, and it uses fewer. What changes is how SiN uses the card:
+
+- **Reverb off (1.00, real card and 86Box):** a hardware buffer per sound. One-shot ADB streams on channels 1–14 (each 1.5–9 s), wavetable voices, and the 3D sources fed from them.
+- **Reverb on (1.11, 86Box):** no wavetable voices and no per-sound streams. Four ADB streams (channels 1, 4, 5 and 6) start with the level and run for minutes, each through a converter into one of A3D sources 12–15. SiN mixes its sounds itself into these four streams, which a reverb would need, and so it no longer goes through the per-sound start path that drops lines.
+
+Two things are still unconfirmed: whether SiN 1.11 with reverb off drops the same lines (the runs above differ in version as well as the setting), and the same reverb-on run on the real card. In SiN 1.11, with or without 3D audio, the driver also routes mixers 8 and 9 to ADB sinks `0x82`/`0x83` and runs ADB channel 2 as a capture stream with no route into it. The model does not implement sinks `0x80`–`0x87`; nothing audible appeared to be missing because of it, but it has not been checked on the real card.
+
 ### Clocks, interrupts and DMA
 
 - **Master clock (Confirmed).** `SMP_TIME` (`0x29198`) counts at 12.288 MHz, which is 256 × 48 kHz (measured: 12,288,079 Hz against the host clock).
