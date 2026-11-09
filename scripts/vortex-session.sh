@@ -29,8 +29,9 @@
 #   TRACES       session folders go here [~/traces]
 #   PARSER       vortex_trace.py, run on the log afterwards [../tools/vortex_trace.py]
 #   PERSIST=1    keep disk changes (drops -snapshot) [off]
-#   VGA          cirrus, or voodoo3 for the emulated Voodoo3 (needs a QEMU built with
-#                the QEmu-3Dfx-Voodoo-3-Port device, set with QEMU=) [cirrus]
+#   VGA          cirrus; std (QEMU standard VGA, for SoftGPU); or voodoo3 for the
+#                emulated Voodoo3 (needs a QEMU built with the QEmu-3Dfx-Voodoo-3-Port
+#                device, set with QEMU=) [cirrus]
 #   V3ROM        Voodoo3 3000 video BIOS for VGA=voodoo3 [~/roms/3k12sd.rom]
 
 set -u
@@ -179,11 +180,11 @@ preflight() {
     [ "$drv" = vfio-pci ] || die "$HOSTDEV is bound to '${drv:-nothing}', not vfio-pci (sudo driverctl set-override $HOSTDEV vfio-pci)"
     [ -z "$EXTRA_CD" ] || [ -f "$EXTRA_CD" ] || die "EXTRA_CD not found: $EXTRA_CD"
     case "$VGA" in
-        cirrus) ;;
+        cirrus|std) ;;
         voodoo3) [ -f "$V3ROM" ] || die "Voodoo3 BIOS not found at $V3ROM (set V3ROM=...)"
                  "$QEMU" -device help 2>/dev/null | grep -q '"voodoo3"' \
                      || die "$QEMU has no voodoo3 device (set QEMU= to the Voodoo3 build)" ;;
-        *) die "VGA must be cirrus or voodoo3" ;;
+        *) die "VGA must be cirrus, std or voodoo3" ;;
     esac
     [ -z "${EXTRA_DISK:-}" ] || [ -f "$EXTRA_DISK" ] || die "EXTRA_DISK not found: $EXTRA_DISK"
     rec_tool >/dev/null
@@ -220,7 +221,7 @@ cmd_run() {
     if [ "$VGA" = voodoo3 ]; then
         args+=(-vga none -device "voodoo3,model=3,legacy-vga=on,romfile=$V3ROM,addr=0x05")
     else
-        args+=(-vga cirrus)
+        args+=(-vga "$VGA")
     fi
     [ "$PERSIST" = 1 ] || args+=(-snapshot)
     [ -n "$EXTRA_CD" ] && args+=(-cdrom "$EXTRA_CD")
