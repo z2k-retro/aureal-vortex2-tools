@@ -21,6 +21,10 @@
  *   run12 = sync srcresp level midi hrtfgrid: converter response, levels and headroom, the MIDI
  *           synthesiser, and directions between the 15-degree table points (about 9 minutes)
  *   run13 = sync reflhf: reflection tone and level against wall reflectance (about 70 s)
+ *   run15 = sync dsfill dshold eqhold dswt ds3d dsstream: DirectSound buffers on wavetable
+ *           voices (where they land, levels, volume/pan/frequency, stereo, 8-bit, DS3D,
+ *           streaming), with dshold and eqhold held for 'vortex-poke.py run15' on the host
+ *           (about 5 minutes)
  * Log: A3DTEST.LOG on the first writable hard disk other than C: (or C:\ if none).
  */
 
@@ -1173,6 +1177,294 @@ static void t_reflhf(void) {
     logmsg("TEST reflhf end");
 }
 
+/* ================================================================== run 15 tests */
+/* DirectSound buffers on wavetable voices. The driver puts hardware buffers on ADB channels
+   until they run out, then on wavetable voices, setting the voice's DSREG bit (0x0008 /
+   0x8008) as it starts it. These tests force that case, measure it, and give the host
+   (vortex-poke.py run15) a steady DSREG voice to experiment on, then a steady 2D noise for
+   two EQ questions. Every tone loop is 1 s long with a whole number of cycles. */
+
+/* tone of hzL (left) and hzR (right, stereo only), amp linear full scale, 8 or 16 bit */
+static void *make_tone2(int rate, int ch, int bits, double secs, double amp, double hzL, double hzR, DWORD *bytes, WAVEFORMATEX *wf) {
+    int frames = (int)(rate * secs), i, c, bpf = ch * bits / 8;
+    unsigned char *p = (unsigned char *)GlobalAlloc(GMEM_FIXED | GMEM_ZEROINIT, frames * bpf + 16);
+    double ph[2] = { 0, 0 }, hz[2] = { hzL, hzR }, a = amp * 32767.0;
+    for (i = 0; i < frames; i++)
+        for (c = 0; c < ch; c++) {
+            int v = (int)(a * dsin(ph[c]));
+            ph[c] += 2 * PI * hz[c] / rate; if (ph[c] > 2 * PI) ph[c] -= 2 * PI;
+            if (bits == 16) { short sv = (short)v; memcpy(p + i * bpf + c * 2, &sv, 2); }
+            else p[i * bpf + c] = (unsigned char)((v >> 8) + 128);
+        }
+    wf->wFormatTag = WAVE_FORMAT_PCM; wf->nChannels = (WORD)ch; wf->nSamplesPerSec = rate;
+    wf->wBitsPerSample = (WORD)bits; wf->nBlockAlign = (WORD)bpf; wf->nAvgBytesPerSec = rate * bpf; wf->cbSize = 0;
+    *bytes = frames * bpf;
+    return p;
+}
+
+/* a buffer holding a tone. flags are added to the usual control flags; hw_only = no software
+   fallback (returns NULL instead). *hw says which it got. */
+static LPDIRECTSOUNDBUFFER ds_tone(DWORD flags, int hw_only, int rate, int ch, int bits, double amp, double hzL, double hzR, DWORD *hw) {
+    DSBUFFERDESC1 d; WAVEFORMATEX wf; DWORD bytes, n1, n2; void *data, *p1, *p2; LPDIRECTSOUNDBUFFER b = NULL; HRESULT hr;
+    data = make_tone2(rate, ch, bits, 1.0, amp, hzL, hzR, &bytes, &wf);
+    memset(&d, 0, sizeof d); d.dwSize = sizeof d;
+    d.dwFlags = DSBCAPS_LOCHARDWARE | DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLFREQUENCY | DSBCAPS_GETCURRENTPOSITION2 | flags;
+    if (!(flags & DSBCAPS_CTRL3D)) d.dwFlags |= DSBCAPS_CTRLPAN;
+    d.dwBufferBytes = bytes; d.lpwfxFormat = &wf;
+    *hw = 1;
+    hr = IDirectSound_CreateSoundBuffer(g_ds, (LPCDSBUFFERDESC)&d, &b, NULL);
+    if (FAILED(hr)) {
+        b = NULL; *hw = 0;
+        if (!hw_only) {
+            d.dwFlags &= ~DSBCAPS_LOCHARDWARE;
+            hr = IDirectSound_CreateSoundBuffer(g_ds, (LPCDSBUFFERDESC)&d, &b, NULL);
+            if (FAILED(hr)) { L_begin(); L_s("ERROR dsound buffer "); L_x(hr); L_end(); b = NULL; }
+        }
+    }
+    if (b && SUCCEEDED(IDirectSoundBuffer_Lock(b, 0, bytes, &p1, &n1, &p2, &n2, 0))) {
+        memcpy(p1, data, n1); if (p2 && n2) memcpy(p2, (char *)data + n1, n2);
+        IDirectSoundBuffer_Unlock(b, p1, n1, p2, n2);
+    }
+    GlobalFree(data);
+    return b;
+}
+
+static void ds_free(LPDIRECTSOUNDBUFFER *b) { if (*b) { IDirectSoundBuffer_Stop(*b); IDirectSoundBuffer_Release(*b); *b = NULL; } }
+
+static void ds_caps(const char *when) {
+    DSCAPS c; memset(&c, 0, sizeof c); c.dwSize = sizeof c;
+    if (FAILED(IDirectSound_GetCaps(g_ds, &c))) return;
+    L_begin(); L_s("dscaps "); L_s(when); L_s(": hw_all="); L_i((long)c.dwMaxHwMixingAllBuffers);
+    L_s(" free_all="); L_i((long)c.dwFreeHwMixingAllBuffers); L_s(" hw_static="); L_i((long)c.dwMaxHwMixingStaticBuffers);
+    L_s(" free_static="); L_i((long)c.dwFreeHwMixingStaticBuffers); L_s(" hw_stream="); L_i((long)c.dwMaxHwMixingStreamingBuffers);
+    L_s(" hw3d="); L_i((long)c.dwMaxHw3DAllBuffers); L_s(" free3d="); L_i((long)c.dwFreeHw3DAllBuffers); L_s(" flags="); L_x(c.dwFlags); L_end();
+}
+
+/* Silent looping hardware buffers that occupy the ADB channels (and, past those, voices),
+   so that the next buffer created lands on a wavetable voice. The last one is released
+   again, freeing the most recently allocated hardware for the buffer under test. */
+#define NFILL 40
+static LPDIRECTSOUNDBUFFER g_fill[NFILL];
+static int g_nfill;
+static void fill_hw(void) {
+    DWORD hw; int i;
+    for (i = 0; i < NFILL; i++) {
+        g_fill[i] = ds_tone(DSBCAPS_STATIC, 1, 22050, 1, 16, 0.0, 441, 441, &hw);
+        if (!g_fill[i]) break;
+        IDirectSoundBuffer_Play(g_fill[i], 0, 0, DSBPLAY_LOOPING);
+        ds_wait(60);
+    }
+    g_nfill = i;
+    L_begin(); L_s("fill: "); L_i(g_nfill); L_s(" silent hardware buffers playing"); L_end();
+    ds_caps("after fill");
+    if (g_nfill > 0) { ds_free(&g_fill[--g_nfill]); ds_wait(200); }
+    L_begin(); L_s("fill: released the last one, "); L_i(g_nfill); L_s(" left"); L_end();
+}
+static void unfill_hw(void) { while (g_nfill > 0) ds_free(&g_fill[--g_nfill]); ds_wait(300); }
+
+/* 1. 24 quiet tones started one by one: where each lands (trace) and whether each is heard */
+static void t_dsfill(void) {
+    LPDIRECTSOUNDBUFFER b[24]; DWORD hw; int i;
+    logmsg("TEST dsfill begin (24 static 22.05 kHz mono buffers, tone k = 300 + 125k Hz, amp 0.04, 0.5 s apart)");
+    if (!ds_open()) return;
+    ds_caps("before");
+    for (i = 0; i < 24; i++) {
+        b[i] = ds_tone(DSBCAPS_STATIC, 0, 22050, 1, 16, 0.04, 300 + 125 * i, 0, &hw);
+        if (b[i]) IDirectSoundBuffer_Play(b[i], 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("STEP dsfill n="); L_i(i); L_s(" what=start k="); L_i(i); L_s(" hz="); L_i(300 + 125 * i); L_s(" hw="); L_i(b[i] ? (long)hw : -1); L_end();
+        ds_wait(500);
+    }
+    ds_caps("all 24 playing");
+    L_begin(); L_s("STEP dsfill n=24 what=hold all"); L_end();
+    ds_wait(4000);
+    for (i = 23; i >= 0; i--) {
+        ds_free(&b[i]);
+        L_begin(); L_s("STEP dsfill n="); L_i(48 - i); L_s(" what=stop k="); L_i(i); L_end();
+        ds_wait(300);
+    }
+    logmsg("TEST dsfill end");
+}
+
+/* 2. one steady tone on a wavetable voice for the host's DSREG experiment (60 s) */
+static void t_dshold(void) {
+    LPDIRECTSOUNDBUFFER b; DWORD hw;
+    logmsg("TEST dshold begin (1 kHz, amp 0.5, 22.05 kHz mono, on the voice freed by fill; 60 s for vortex-poke.py run15)");
+    if (!ds_open()) return;
+    fill_hw();
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 1, 16, 0.5, 1000, 0, &hw);
+    if (b) IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+    L_begin(); L_s("STEP dshold n=0 what=tone hz=1000 amp=0.50 hw="); L_i(b ? (long)hw : -1); L_end();
+    ds_wait(60000);
+    ds_free(&b);
+    unfill_hw();
+    logmsg("TEST dshold end");
+}
+
+/* 3. steady 2D noise on one ADB channel for the host's EQ questions (45 s) */
+static void t_eqhold(void) {
+    DWORD hw; LPDIRECTSOUNDBUFFER b;
+    logmsg("TEST eqhold begin (noise, amp 0.25, 48 kHz mono, one buffer, 45 s for vortex-poke.py run15)");
+    if (!ds_open()) return;
+    b = ds_sig(SIG_NOISE, 48000, 16, 2.0, 0.25, 0, &hw);
+    if (!b) return;
+    IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+    L_begin(); L_s("STEP eqhold n=0 what=noise hw="); L_i((long)hw); L_end();
+    ds_wait(45000);
+    ds_free(&b);
+    logmsg("TEST eqhold end");
+}
+
+/* 4. volume, pan and frequency on a wavetable voice, stereo and 8-bit there, then the same
+      tone on an ADB channel as the level reference */
+static void ds_steps(LPDIRECTSOUNDBUFFER b, const char *path, int *n, int full) {
+    static const long vols[] = { 0, -300, -600, -1200, -2400, -4800, -10000 };
+    static const long pans[] = { -10000, -2400, -600, 0, 600, 2400, 10000 };
+    static const DWORD freqs[] = { 11025, 22050, 32000, 44100, 48000 };
+    int i, nv = full ? 7 : 3;
+    for (i = 0; i < nv; i++) {
+        IDirectSoundBuffer_SetVolume(b, vols[i]);
+        L_begin(); L_s("STEP dswt n="); L_i((*n)++); L_s(" path="); L_s(path); L_s(" what=volume mb="); L_i(vols[i]); L_end(); ds_wait(1500);
+    }
+    IDirectSoundBuffer_SetVolume(b, 0);
+    if (!full) return;
+    for (i = 0; i < 7; i++) {
+        IDirectSoundBuffer_SetPan(b, pans[i]);
+        L_begin(); L_s("STEP dswt n="); L_i((*n)++); L_s(" path="); L_s(path); L_s(" what=pan mb="); L_i(pans[i]); L_end(); ds_wait(1500);
+    }
+    IDirectSoundBuffer_SetPan(b, 0);
+    for (i = 0; i < 5; i++) {
+        HRESULT hr = IDirectSoundBuffer_SetFrequency(b, freqs[i]);
+        L_begin(); L_s("STEP dswt n="); L_i((*n)++); L_s(" path="); L_s(path); L_s(" what=frequency hz="); L_i((long)freqs[i]); L_s(" hr="); L_x(hr); L_end(); ds_wait(1500);
+    }
+    IDirectSoundBuffer_SetFrequency(b, 22050);
+}
+static void t_dswt(void) {
+    LPDIRECTSOUNDBUFFER b; DWORD hw; int n = 0;
+    logmsg("TEST dswt begin (1 kHz amp 0.5 22.05 kHz: volume, pan, frequency on a wavetable voice; stereo and 8-bit; ADB reference)");
+    if (!ds_open()) return;
+    fill_hw();
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 1, 16, 0.5, 1000, 0, &hw);
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("dswt: test buffer hw="); L_i((long)hw); L_end();
+        ds_steps(b, "wt", &n, 1);
+        ds_free(&b); ds_wait(300);
+    }
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 2, 16, 0.5, 500, 1500, &hw);       /* stereo: 500 Hz left, 1500 Hz right */
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("STEP dswt n="); L_i(n++); L_s(" path=wt what=stereo hzL=500 hzR=1500 hw="); L_i((long)hw); L_end();
+        ds_wait(2500); ds_free(&b); ds_wait(300);
+    }
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 1, 8, 0.5, 1000, 0, &hw);
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("STEP dswt n="); L_i(n++); L_s(" path=wt what=8bit hz=1000 hw="); L_i((long)hw); L_end();
+        ds_wait(2500); ds_free(&b); ds_wait(300);
+    }
+    b = ds_tone(DSBCAPS_STATIC, 0, 48000, 1, 16, 0.5, 1000, 0, &hw);
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("STEP dswt n="); L_i(n++); L_s(" path=wt what=rate48k hz=1000 hw="); L_i((long)hw); L_end();
+        ds_wait(2500); ds_free(&b); ds_wait(300);
+    }
+    unfill_hw();
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 1, 16, 0.5, 1000, 0, &hw);       /* the same tone on an ADB channel */
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        ds_steps(b, "adb", &n, 0);
+        IDirectSoundBuffer_SetPan(b, -10000);
+        L_begin(); L_s("STEP dswt n="); L_i(n++); L_s(" path=adb what=pan mb=-10000"); L_end(); ds_wait(1500);
+        IDirectSoundBuffer_SetPan(b, 0);
+        ds_free(&b); ds_wait(300);
+    }
+    b = ds_tone(DSBCAPS_STATIC, 0, 22050, 2, 16, 0.5, 500, 1500, &hw);
+    if (b) {
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        L_begin(); L_s("STEP dswt n="); L_i(n++); L_s(" path=adb what=stereo hzL=500 hzR=1500"); L_end();
+        ds_wait(2500); ds_free(&b); ds_wait(300);
+    }
+    logmsg("TEST dswt end");
+}
+
+/* 5. DirectSound 3D buffers (what Drakan used): where they go and how position is rendered */
+static void t_ds3d(void) {
+    static const struct { const char *name; float x, y, z; } pos[] = {
+        { "front", 0, 0, 2 }, { "right", 2, 0, 0 }, { "behind", 0, 0, -2 }, { "left", -2, 0, 0 },
+        { "above", 0, 2, 0.01f }, { "front_far", 0, 0, 20 }, { "front_near", 0, 0, 0.5f } };
+    LPDIRECTSOUNDBUFFER b; LPDIRECTSOUND3DBUFFER b3 = NULL; DWORD hw; HRESULT hr; int i, k, n = 0;
+    logmsg("TEST ds3d begin (DSBCAPS_CTRL3D, 1 kHz amp 0.5 22.05 kHz mono, 2 s per position)");
+    if (!ds_open()) return;
+    for (k = 0; k < 2; k++) {                       /* k = 1: the same with the ADB channels full */
+        if (k) fill_hw();
+        b = ds_tone(DSBCAPS_STATIC | DSBCAPS_CTRL3D, 0, 22050, 1, 16, 0.5, 1000, 0, &hw);
+        if (!b) { if (k) unfill_hw(); continue; }
+        hr = IDirectSoundBuffer_QueryInterface(b, &IID_IDirectSound3DBuffer, (void **)&b3);
+        L_begin(); L_s("ds3d: buffer hw="); L_i((long)hw); L_s(" fill="); L_i(k); L_s(" 3d interface hr="); L_x(hr); L_end();
+        IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+        for (i = 0; i < 7; i++) {
+            if (b3) IDirectSound3DBuffer_SetPosition(b3, pos[i].x, pos[i].y, pos[i].z, DS3D_IMMEDIATE);
+            L_begin(); L_s("STEP ds3d n="); L_i(n++); L_s(" fill="); L_i(k); L_s(" pos="); L_s(pos[i].name); L_end();
+            ds_wait(2000);
+        }
+        if (b3) { IDirectSound3DBuffer_Release(b3); b3 = NULL; }
+        ds_free(&b);
+        if (k) unfill_hw();
+        ds_wait(300);
+    }
+    logmsg("TEST ds3d end");
+}
+
+/* 6. a streaming (non-static) buffer refilled behind the play cursor, the way games stream
+      dialogue and music: a tone that steps up a semitone-ish every 0.5 s for 8 s */
+static void t_dsstream(void) {
+    DSBUFFERDESC1 d; WAVEFORMATEX wf; LPDIRECTSOUNDBUFFER b = NULL; HRESULT hr;
+    DWORD size, wr = 0, play, wcur, n1, n2; void *p1, *p2; double ph = 0, t0, hz = 400; int k, step = -1, last = -1;
+    long frames_done = 0;
+    logmsg("TEST dsstream begin (streaming 1 s buffer, 22.05 kHz mono, tone 400 Hz x 1.06^k, k = 0..15 every 0.5 s)");
+    if (!ds_open()) return;
+    wf.wFormatTag = WAVE_FORMAT_PCM; wf.nChannels = 1; wf.nSamplesPerSec = 22050; wf.wBitsPerSample = 16;
+    wf.nBlockAlign = 2; wf.nAvgBytesPerSec = 44100; wf.cbSize = 0;
+    size = 44100;
+    memset(&d, 0, sizeof d); d.dwSize = sizeof d;
+    d.dwFlags = DSBCAPS_LOCHARDWARE | DSBCAPS_CTRLVOLUME | DSBCAPS_GETCURRENTPOSITION2;
+    d.dwBufferBytes = size; d.lpwfxFormat = &wf;
+    hr = IDirectSound_CreateSoundBuffer(g_ds, (LPCDSBUFFERDESC)&d, &b, NULL);
+    if (FAILED(hr)) { L_begin(); L_s("ERROR dsstream hardware buffer "); L_x(hr); L_end(); return; }
+    /* silence first, then keep writing up to the play cursor */
+    if (SUCCEEDED(IDirectSoundBuffer_Lock(b, 0, size, &p1, &n1, &p2, &n2, 0))) { memset(p1, 0, n1); IDirectSoundBuffer_Unlock(b, p1, n1, p2, n2); }
+    IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
+    t0 = now_s();
+    while (now_s() - t0 < 9.0) {
+        DWORD avail, i; short *s;
+        pump();
+        if (FAILED(IDirectSoundBuffer_GetCurrentPosition(b, &play, &wcur))) break;
+        avail = (play + size - wr) % size;
+        if (avail >= 2048) {
+            if (SUCCEEDED(IDirectSoundBuffer_Lock(b, wr, avail, &p1, &n1, &p2, &n2, 0))) {
+                for (k = 0; k < 2; k++) {
+                    s = (short *)(k ? p2 : p1); i = (k ? n2 : n1) / 2;
+                    while (s && i--) {
+                        step = (int)(frames_done / 11025);
+                        if (step > 15) *s++ = 0;
+                        else {
+                            if (step != last) { int j; hz = 400; for (j = 0; j < step; j++) hz *= 1.06; last = step; }
+                            *s++ = (short)(16000 * dsin(ph)); ph += 2 * PI * hz / 22050; if (ph > 2 * PI) ph -= 2 * PI;
+                        }
+                        frames_done++;
+                    }
+                }
+                IDirectSoundBuffer_Unlock(b, p1, n1, p2, n2);
+            }
+            wr = (wr + avail) % size;
+        }
+        Sleep(20);
+    }
+    L_begin(); L_s("STEP dsstream n=0 what=done frames_written="); L_i(frames_done); L_end();
+    ds_free(&b);
+    logmsg("TEST dsstream end");
+}
+
 /* ------------------------------------------------------------------ main */
 typedef void (*TESTFN)(void);
 static const struct { const char *name; TESTFN fn; } tests[] = {
@@ -1182,6 +1474,7 @@ static const struct { const char *name; TESTFN fn; } tests[] = {
     {"xtalk", t_xtalk}, {"ref", t_ref}, {"hrtfmap", t_hrtfmap}, {"glide2", t_glide2}, {"reflect2", t_reflect2},
     {"multi", t_multi}, {"dsound", t_dsound}, {"elev5", t_elev5}, {"tcsweep", t_tcsweep}, {"click90", t_click90}, {"noise2d", t_noise2d}, {"wtpath", t_wtpath},
     {"srcresp", t_srcresp}, {"midi", t_midi}, {"level", t_level}, {"hrtfgrid", t_hrtfgrid}, {"reflhf", t_reflhf},
+    {"dsfill", t_dsfill}, {"dshold", t_dshold}, {"eqhold", t_eqhold}, {"dswt", t_dswt}, {"ds3d", t_ds3d}, {"dsstream", t_dsstream},
 };
 /* default (no arguments): the run-2 suite */
 static const char *suite2[] = { "xtalk", "ref", "hrtfmap", "glide2", "reflect2", "multi", "dsound" };
@@ -1246,6 +1539,7 @@ void entry(void) {
         else if (seq(tok, "v1")) { for (i = 0; i < 12; i++) tests[i].fn(); }
         else if (seq(tok, "run3")) { t_sync(); run_named("elev5"); run_named("tcsweep"); }
         else if (seq(tok, "run13")) { t_sync(); t_reflhf(); }
+        else if (seq(tok, "run15")) { t_sync(); t_dsfill(); t_dshold(); t_eqhold(); t_dswt(); t_ds3d(); t_dsstream(); }
         else if (seq(tok, "run12")) { t_sync(); t_srcresp(); t_level(); t_midi(); t_hrtfgrid(); }
         else run_named(tok);
         ran = 1;

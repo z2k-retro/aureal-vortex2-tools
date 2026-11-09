@@ -67,6 +67,13 @@ EXTRA_CD=~/a3dtest/a3dtest.iso EXTRA_DISK=~/a3dtest/results.img ./scripts/vortex
 tools/a3dtest/a3dtest-media.sh log                    # read the log back
 ```
 
+Run 15 also needs the host side. Start it in a second terminal before running the guest program; it waits for the two tests it acts in and logs its writes, with UTC times, to `poke-log.jsonl`:
+
+```sh
+sudo tools/vortex-poke.py run15 --log ~/a3dtest/run15-poke.jsonl
+#   in Windows: D:\A3DTEST.EXE run15   (about 5 minutes)
+```
+
 The log's clock is the guest's and drifts slightly against the trace. Line steps up with the trace by the opening and closing sync clicks, or by bursts of register writes (each change of position, for instance, produces one burst of HRTF writes).
 
 | Test | Measures |
@@ -81,8 +88,10 @@ The log's clock is the guest's and drifts slightly against the trace. Line steps
 | `xtalk`, `ref`, `click90`, `noise2d` | Output modes, reference levels, canceller and EQ stimuli |
 | `multi` | Sixteen simultaneous sources (slot allocation) |
 | `srcresp`, `level`, `midi` | Converter filter response, levels and headroom, the MIDI synthesiser |
+| `reflhf` | Reflection tone and level against wall reflectance |
+| `dsfill`, `dshold`, `dswt`, `ds3d`, `dsstream`, `eqhold` | DirectSound buffers on wavetable voices: where 24 buffers land and whether each is heard; volume, pan, frequency, stereo and 8-bit on a voice against the same tone on an ADB channel; DirectSound 3D buffers; a streaming buffer; steady stimuli for `vortex-poke.py run15` (`DSREG` and EQ) |
 
-Suites: no arguments runs the run-2 set; `v1`, `run3` and `run12` run those sessions' sets; `all` runs everything. The comment at the top of `a3dtest.c` lists the exact contents.
+Suites: no arguments runs the run-2 set; `v1`, `run3`, `run12`, `run13` and `run15` run those sessions' sets; `all` runs everything. The comment at the top of `a3dtest.c` lists the exact contents.
 
 `tools/sbtest/sbtest.asm` is a small DOS program (assemble with `nasm -f bin sbtest.asm -o SBTEST.COM`) that resets the Sound Blaster DSP at 220h, reads its version, plays one second of 8-bit DMA on DMA 1 and waits for IRQ 5, printing each step. Real-mode DOS cannot be tested under QEMU passthrough, because QEMU does not forward legacy ISA ports to the card; in a Windows DOS window the driver's software emulation answers.
 

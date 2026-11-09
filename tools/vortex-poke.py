@@ -22,6 +22,11 @@ timestamp (the same clock as qemu-trace.log) for alignment.
                                                  HRTF and ITD registers every ~100 us for 1 s (binary samples
                                                  in glide.bin, events in the log), so the glide law is read
                                                  straight off the hardware instead of out of the audio
+  sudo ./vortex-poke.py run15 [--log FILE]       start before 'A3DTEST run15': during its dshold test, clears
+                                                 and restores the playing voices' DSREG bits (3 s each, about
+                                                 25 s); during eqhold, one EQ band with the bypass at +1, -1
+                                                 and 0, then whether a band's current gain ramps toward its
+                                                 target (about 30 s). Waits for each test by itself.
   sudo ./vortex-poke.py eqsweep [--log FILE]     start once 'A3DTEST noise2d' is playing: switches the
                                                  chip's EQ in band by band, 4 s each (about 1 minute)
 
@@ -125,6 +130,12 @@ def main():
         def note(**kw):
             kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
         eqsweep(bar, note)
+        return
+    if cmd == 'run15':
+        log = open(logpath, 'a')
+        def note(**kw):
+            kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
+        run15(bar, note)
         return
     if cmd == 'glidewatch':
         outpath = sys.argv[sys.argv.index('--out') + 1] if '--out' in sys.argv else 'glide.bin'
@@ -357,6 +368,111 @@ def eqsweep(bar, note, hold=4.0):
     finally:
         restore()
         note(event='eq_restored', bypass=[hex(bar.rd(a) & 0xffff) for a in EQ_BYPASS])
+
+
+# ---------------------------------------------------------------- run 15: DSREG and two EQ questions
+DSREG = (0x0008, 0x8008)                     # bank 0, bank 1: one bit per voice
+WT_FIFO = 0x16000                            # + voice * 4, bit 4 = valid
+ADB_FIFO = 0x16100                           # + channel * 4
+WT_PARM = lambda v: (v // 32) * 0x8000 + 0x200 + (v % 32) * 0x10
+
+def _wt_state(bar):
+    ds = [bar.rd(a) for a in DSREG]
+    wt = [v for v in range(64) if bar.rd(WT_FIFO + 4 * v) & 0x10]
+    adb = [c for c in range(32) if bar.rd(ADB_FIFO + 4 * c) & 0x10]
+    return ds, wt, adb
+
+def _wait_steady(bar, note, what, cond, secs=6.0):
+    """Wait until cond(ds, wt, adb) holds with the same state for secs seconds."""
+    since, last, beat = None, None, time.time()
+    while True:
+        st = _wt_state(bar); key = (tuple(st[0]), tuple(st[1]), tuple(st[2]))
+        if cond(*st) and key == last:
+            if time.time() - since >= secs:
+                return st
+        else:
+            since = time.time() if cond(*st) else None
+        last = key
+        if time.time() - beat > 10:
+            beat = time.time()
+            print(f'  {utc()} waiting for {what}: dsreg {st[0][0]:#x}/{st[0][1]:#x} wt {st[1]} adb {st[2]}', flush=True)
+        time.sleep(0.25)
+
+def run15(bar, note, hold=3.0):
+    print('run alongside "A3DTEST run15": acts during its dshold (DSREG) and eqhold (EQ) tests')
+    # --- A: DSREG, while a tone plays on a voice whose DSREG bit is set
+    def dsreg_voice(ds, wt, adb):
+        return any((ds[v // 32] >> (v % 32)) & 1 for v in wt)
+    ds, wt, adb = _wait_steady(bar, note, 'a playing voice with DSREG set (dshold)', dsreg_voice)
+    on = [v for v in wt if (ds[v // 32] >> (v % 32)) & 1]
+    note(event='dsreg_found', dsreg=[hex(x) for x in ds], wt_playing=wt, wt_with_dsreg=on, adb_playing=adb,
+         parm={v: [hex(bar.rd(WT_PARM(v) + 4 * k)) for k in range(4)] for v in wt},
+         words={hex(a): hex(bar.rd(a)) for a in (0x80, 0x84, 0x8080, 0x8084, 0x180, 0x8180)})
+    sched = [('driver value', None), ('DSREG cleared', (0, 0)), ('driver value', None), ('DSREG cleared', (0, 0)),
+             ('DSREG all ones', (0xffffffff, 0xffffffff)), ('driver value', None), ('DSREG cleared', (0, 0)),
+             ('driver value', None)]
+    try:
+        for i, (name, val) in enumerate(sched):
+            for a, d in zip(DSREG, ds):
+                bar.wr(a, d if val is None else val[DSREG.index(a)])
+            note(event='dsreg_config', index=i, name=name, readback=[hex(bar.rd(a)) for a in DSREG])
+            t = time.time()
+            while time.time() - t < hold:      # see whether the driver puts its value back
+                time.sleep(0.5)
+            note(event='dsreg_after', index=i, readback=[hex(bar.rd(a)) for a in DSREG],
+                 wt_playing=_wt_state(bar)[1])
+    except KeyboardInterrupt:
+        note(event='interrupted')
+    finally:
+        for a, d in zip(DSREG, ds):
+            bar.wr(a, d)
+        note(event='dsreg_restored', readback=[hex(bar.rd(a)) for a in DSREG])
+
+    # --- B: EQ, while one 2D noise buffer plays on an ADB channel and no voice plays
+    _wait_steady(bar, note, 'ADB streams only, no voices (eqhold)', lambda ds, wt, adb: not wt and 1 <= len(adb) <= 3)
+    tgt = lambda side, i: EQ_BAND(side, i) - 4          # +0x28: target band gain
+    addrs = [EQ_BAND(s, i) for s in 'LR' for i in range(10)] + [tgt(s, i) for s in 'LR' for i in range(10)] + list(EQ_BYPASS)
+    orig = {a: bar.rd(a) & 0xffff for a in addrs}
+    note(event='eq_captured', current_left=[hex(orig[EQ_BAND('L', i)]) for i in range(10)],
+         target_left=[hex(orig[tgt('L', i)]) for i in range(10)], bypass=[hex(orig[a]) for a in EQ_BYPASS])
+    B = 4
+    band = lambda val: {EQ_BAND('L', B): val, EQ_BAND('R', B): val}
+    byp = lambda val: {EQ_BYPASS[0]: val, EQ_BYPASS[1]: val}
+    sched = [('base', {}),
+             (f'band {B} normal, bypass +1', {**band(EQ_ON), **byp(0x7fff)}),
+             (f'band {B} normal, bypass -1 (0x8001)', {**band(EQ_ON), **byp(0x8001)}),
+             ('bands 0, bypass -1 (0x8001)', byp(0x8001)),
+             (f'band {B} normal, bypass 0', {**band(EQ_ON), **byp(0)}),
+             ('base again', {})]
+
+    def restore():
+        for a, val in orig.items():
+            bar.wr(a, val)
+    try:
+        for i, (name, writes) in enumerate(sched):
+            restore()
+            for a, val in writes.items():
+                bar.wr(a, val)
+            note(event='eq_config', index=i, name=name, writes={hex(a): hex(v) for a, v in writes.items()})
+            time.sleep(4.0)
+        # does the current band gain move toward the target by itself?
+        restore()
+        bar.wr(tgt('L', B), 0); bar.wr(tgt('R', B), 0)
+        bar.wr(EQ_BAND('L', B), EQ_ON); bar.wr(EQ_BAND('R', B), EQ_ON)
+        bar.wr(EQ_BYPASS[0], 0); bar.wr(EQ_BYPASS[1], 0)
+        note(event='eq_config', index=len(sched), name=f'ramp test: band {B} current normal, target 0, bypass 0')
+        samples = []
+        t0 = time.time()
+        while time.time() - t0 < 4.0:
+            samples.append((round(time.time() - t0, 3), hex(bar.rd(EQ_BAND('L', B)) & 0xffff), hex(bar.rd(tgt('L', B)) & 0xffff)))
+            time.sleep(0.1)
+        note(event='eq_ramp', samples=samples)
+    except KeyboardInterrupt:
+        note(event='interrupted')
+    finally:
+        restore()
+        note(event='eq_restored', bypass=[hex(bar.rd(a) & 0xffff) for a in EQ_BYPASS])
+    print('run15 host part done; leave the guest to finish')
 
 
 # ---------------------------------------------------------------- canceller system identification
