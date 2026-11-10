@@ -131,7 +131,7 @@ def main():
             kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
         eqsweep(bar, note)
         return
-    if cmd == 'run15':
+    if cmd in ('run15', 'run16'):
         log = open(logpath, 'a')
         def note(**kw):
             kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
@@ -411,37 +411,44 @@ def _wait_steady(bar, note, what, cond, secs=6.0):
         time.sleep(0.25)
 
 def run15(bar, note, hold=3.0):
-    print('run alongside "A3DTEST run15": acts during its dshold (DSREG) and eqhold (EQ) tests')
+    print('run alongside "A3DTEST run15" or "run16": acts during their dshold (DSREG) and eqhold (EQ) tests')
     # --- A: DSREG, while a tone plays on a voice whose DSREG bit is set
     def dsreg_voice(ds, wt, adb):
         return any((ds[v // 32] >> (v % 32)) & 1 for v in wt)
-    ds, wt, adb = _wait_steady(bar, note, 'a playing voice with DSREG set (dshold)', dsreg_voice)
+    def eq_ready(ds, wt, adb):
+        return not wt and 1 <= len(adb) <= 3
+    ds, wt, adb = _wait_steady(bar, note, 'a playing voice with DSREG set (dshold), or the eqhold noise',
+                               lambda ds, wt, adb: dsreg_voice(ds, wt, adb) or eq_ready(ds, wt, adb))
+    skip_dsreg = not dsreg_voice(ds, wt, adb)
+    if skip_dsreg:
+        note(event='dsreg_skipped', reason='no voice with DSREG played before the eqhold noise', adb_playing=adb)
     on = [v for v in wt if (ds[v // 32] >> (v % 32)) & 1]
-    note(event='dsreg_found', dsreg=[hex(x) for x in ds], wt_playing=wt, wt_with_dsreg=on, adb_playing=adb,
-         parm={v: [hex(bar.rd(WT_PARM(v) + 4 * k)) for k in range(4)] for v in wt},
-         words={hex(a): hex(bar.rd(a)) for a in (0x80, 0x84, 0x8080, 0x8084, 0x180, 0x8180)})
-    sched = [('driver value', None), ('DSREG cleared', (0, 0)), ('driver value', None), ('DSREG cleared', (0, 0)),
-             ('DSREG all ones', (0xffffffff, 0xffffffff)), ('driver value', None), ('DSREG cleared', (0, 0)),
-             ('driver value', None)]
-    try:
-        for i, (name, val) in enumerate(sched):
+    if not skip_dsreg:
+        note(event='dsreg_found', dsreg=[hex(x) for x in ds], wt_playing=wt, wt_with_dsreg=on, adb_playing=adb,
+             parm={v: [hex(bar.rd(WT_PARM(v) + 4 * k)) for k in range(4)] for v in wt},
+             words={hex(a): hex(bar.rd(a)) for a in (0x80, 0x84, 0x8080, 0x8084, 0x180, 0x8180)})
+        sched = [('driver value', None), ('DSREG cleared', (0, 0)), ('driver value', None), ('DSREG cleared', (0, 0)),
+                 ('DSREG all ones', (0xffffffff, 0xffffffff)), ('driver value', None), ('DSREG cleared', (0, 0)),
+                 ('driver value', None)]
+        try:
+            for i, (name, val) in enumerate(sched):
+                for a, d in zip(DSREG, ds):
+                    bar.wr(a, d if val is None else val[DSREG.index(a)])
+                note(event='dsreg_config', index=i, name=name, readback=[hex(bar.rd(a)) for a in DSREG])
+                t = time.time()
+                while time.time() - t < hold:      # see whether the driver puts its value back
+                    time.sleep(0.5)
+                note(event='dsreg_after', index=i, readback=[hex(bar.rd(a)) for a in DSREG],
+                     wt_playing=_wt_state(bar)[1])
+        except KeyboardInterrupt:
+            note(event='interrupted')
+        finally:
             for a, d in zip(DSREG, ds):
-                bar.wr(a, d if val is None else val[DSREG.index(a)])
-            note(event='dsreg_config', index=i, name=name, readback=[hex(bar.rd(a)) for a in DSREG])
-            t = time.time()
-            while time.time() - t < hold:      # see whether the driver puts its value back
-                time.sleep(0.5)
-            note(event='dsreg_after', index=i, readback=[hex(bar.rd(a)) for a in DSREG],
-                 wt_playing=_wt_state(bar)[1])
-    except KeyboardInterrupt:
-        note(event='interrupted')
-    finally:
-        for a, d in zip(DSREG, ds):
-            bar.wr(a, d)
-        note(event='dsreg_restored', readback=[hex(bar.rd(a)) for a in DSREG])
+                bar.wr(a, d)
+            note(event='dsreg_restored', readback=[hex(bar.rd(a)) for a in DSREG])
 
     # --- B: EQ, while one 2D noise buffer plays on an ADB channel and no voice plays
-    _wait_steady(bar, note, 'ADB streams only, no voices (eqhold)', lambda ds, wt, adb: not wt and 1 <= len(adb) <= 3)
+    _wait_steady(bar, note, 'ADB streams only, no voices (eqhold)', eq_ready)
     tgt = lambda side, i: EQ_BAND(side, i) - 4          # +0x28: target band gain
     addrs = [EQ_BAND(s, i) for s in 'LR' for i in range(10)] + [tgt(s, i) for s in 'LR' for i in range(10)] + list(EQ_BYPASS)
     orig = {a: bar.rd(a) & 0xffff for a in addrs}

@@ -21,6 +21,8 @@
  *   run12 = sync srcresp level midi hrtfgrid: converter response, levels and headroom, the MIDI
  *           synthesiser, and directions between the 15-degree table points (about 9 minutes)
  *   run13 = sync reflhf: reflection tone and level against wall reflectance (about 70 s)
+ *   run16 = run15 with A3D never opened (dssync instead of sync): DirectSound as the
+ *           driver's only client, as in a game's DirectSound mode
  *   run15 = sync dsfill dshold eqhold dswt ds3d dsstream: DirectSound buffers on wavetable
  *           voices (where they land, levels, volume/pan/frequency, stereo, 8-bit, DS3D,
  *           streaming), with dshold and eqhold held for 'vortex-poke.py run15' on the host
@@ -1303,13 +1305,13 @@ static void t_dshold(void) {
 /* 3. steady 2D noise on one ADB channel for the host's EQ questions (45 s) */
 static void t_eqhold(void) {
     DWORD hw; LPDIRECTSOUNDBUFFER b;
-    logmsg("TEST eqhold begin (noise, amp 0.25, 48 kHz mono, one buffer, 45 s for vortex-poke.py run15)");
+    logmsg("TEST eqhold begin (noise, amp 0.25, 48 kHz mono, one buffer, 60 s for vortex-poke.py run15)");
     if (!ds_open()) return;
     b = ds_sig(SIG_NOISE, 48000, 16, 2.0, 0.25, 0, &hw);
     if (!b) return;
     IDirectSoundBuffer_Play(b, 0, 0, DSBPLAY_LOOPING);
     L_begin(); L_s("STEP eqhold n=0 what=noise hw="); L_i((long)hw); L_end();
-    ds_wait(45000);
+    ds_wait(60000);
     ds_free(&b);
     logmsg("TEST eqhold end");
 }
@@ -1465,6 +1467,21 @@ static void t_dsstream(void) {
     logmsg("TEST dsstream end");
 }
 
+/* sync clicks through DirectSound, for runs that leave A3D closed */
+static void t_dssync(void) {
+    LPDIRECTSOUNDBUFFER b; DWORD hw; int i;
+    logmsg("TEST dssync begin");
+    if (!ds_open()) return;
+    b = ds_sig(SIG_IMPULSE, 48000, 16, 0.05, 0.9, 0, &hw);
+    for (i = 0; i < 3 && b; i++) {
+        IDirectSoundBuffer_SetCurrentPosition(b, 0); IDirectSoundBuffer_Play(b, 0, 0, 0);
+        L_begin(); L_s("STEP dssync n="); L_i(i); L_s(" hw="); L_i((long)hw); L_end();
+        ds_wait(500);
+    }
+    ds_free(&b);
+    logmsg("TEST dssync end");
+}
+
 /* ------------------------------------------------------------------ main */
 typedef void (*TESTFN)(void);
 static const struct { const char *name; TESTFN fn; } tests[] = {
@@ -1475,7 +1492,9 @@ static const struct { const char *name; TESTFN fn; } tests[] = {
     {"multi", t_multi}, {"dsound", t_dsound}, {"elev5", t_elev5}, {"tcsweep", t_tcsweep}, {"click90", t_click90}, {"noise2d", t_noise2d}, {"wtpath", t_wtpath},
     {"srcresp", t_srcresp}, {"midi", t_midi}, {"level", t_level}, {"hrtfgrid", t_hrtfgrid}, {"reflhf", t_reflhf},
     {"dsfill", t_dsfill}, {"dshold", t_dshold}, {"eqhold", t_eqhold}, {"dswt", t_dswt}, {"ds3d", t_ds3d}, {"dsstream", t_dsstream},
+    {"dssync", t_dssync},
 };
+static int g_noa3d;     /* run16: A3D is never opened, so DirectSound is the driver's only client */
 /* default (no arguments): the run-2 suite */
 static const char *suite2[] = { "xtalk", "ref", "hrtfmap", "glide2", "reflect2", "multi", "dsound" };
 #define NTESTS (sizeof(tests) / sizeof(tests[0]))
@@ -1524,8 +1543,12 @@ void entry(void) {
 #ifdef SMOKE
     if (!init_a3d()) { logmsg("SMOKE: continuing without A3D"); t_srcresp(); t_midi(); ExitProcess(0); }
 #endif
-    if (!init_a3d()) { MessageBoxA(g_wnd, "A3D initialisation failed - see A3DTEST.LOG", "a3dtest", MB_OK); ExitProcess(1); }
-    hold(NULL, 0, 1000);
+    {   /* "run16" anywhere on the command line: leave A3D closed */
+        const char *c = cmd; for (; *c; c++) if (c[0] == 'r' && c[1] == 'u' && c[2] == 'n' && c[3] == '1' && c[4] == '6') g_noa3d = 1;
+    }
+    if (g_noa3d) logmsg("A3D left closed (run16): DirectSound only");
+    else if (!init_a3d()) { MessageBoxA(g_wnd, "A3D initialisation failed - see A3DTEST.LOG", "a3dtest", MB_OK); ExitProcess(1); }
+    if (g_noa3d) ds_wait(1000); else hold(NULL, 0, 1000);
 
     /* skip program name (possibly quoted) */
     if (*cmd == '"') { cmd++; while (*cmd && *cmd != '"') cmd++; if (*cmd) cmd++; }
@@ -1540,12 +1563,13 @@ void entry(void) {
         else if (seq(tok, "run3")) { t_sync(); run_named("elev5"); run_named("tcsweep"); }
         else if (seq(tok, "run13")) { t_sync(); t_reflhf(); }
         else if (seq(tok, "run15")) { t_sync(); t_dsfill(); t_dshold(); t_eqhold(); t_dswt(); t_ds3d(); t_dsstream(); }
+        else if (seq(tok, "run16")) { t_dssync(); t_dsfill(); t_dshold(); t_eqhold(); t_dswt(); t_ds3d(); t_dsstream(); }
         else if (seq(tok, "run12")) { t_sync(); t_srcresp(); t_level(); t_midi(); t_hrtfgrid(); }
         else run_named(tok);
         ran = 1;
     }
     if (!ran) { t_sync(); for (i = 0; i < sizeof suite2 / sizeof suite2[0]; i++) run_named(suite2[i]); }
-    t_sync();                                   /* closing sync marks the end */
+    if (g_noa3d) t_dssync(); else t_sync();     /* closing sync marks the end */
     if (g_om_saved) {
         HRESULT hr = IA3d4_SetOutputMode(a3d, g_om0, g_fx0, g_rx0);
         L_begin(); L_s("output mode restored hr="); L_x(hr); L_end();
