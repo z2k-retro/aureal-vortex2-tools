@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prepare and read back the media for an a3dtest session.
 #   ./a3dtest-media.sh iso        build ~/a3dtest/a3dtest.iso containing A3DTEST.EXE
+#                                 (EXTRA_FILES="a b" adds more files; README=file replaces the readme)
 #   ./a3dtest-media.sh disk       create an empty 64 MB FAT16 results disk ~/a3dtest/results.img
 #   ./a3dtest-media.sh log        print A3DTEST.LOG from the results disk
 #   ./a3dtest-media.sh clear      delete A3DTEST.LOG from the results disk (before a fresh run)
@@ -14,7 +15,9 @@ mkdir -p "$DIR"
 case "${1:-}" in
   iso)
     stage=$(mktemp -d); cp "$EXE" "$stage/A3DTEST.EXE"
-    printf 'Run D: or E:\\A3DTEST.EXE (whichever is the CD).\r\nNo arguments runs every test (about 6 minutes).\r\nThe log goes to the results disk as A3DTEST.LOG.\r\n' > "$stage/README.TXT"
+    for f in ${EXTRA_FILES:-}; do cp "$f" "$stage/"; done
+    if [ -n "${README:-}" ]; then sed 's/$/\r/' "$README" > "$stage/README.TXT"
+    else printf 'Run D: or E:\\A3DTEST.EXE (whichever is the CD).\r\nNo arguments runs every test (about 6 minutes).\r\nThe log goes to the results disk as A3DTEST.LOG.\r\n' > "$stage/README.TXT"; fi
     genisoimage -quiet -o "$DIR/a3dtest.iso" -J -r -V A3DTEST "$stage"; rm -rf "$stage"
     echo "built $DIR/a3dtest.iso" ;;
   disk)
