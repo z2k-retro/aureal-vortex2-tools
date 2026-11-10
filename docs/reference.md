@@ -351,6 +351,9 @@ So quad mode is a front/rear crossfade done by the driver with ordinary mixer ga
 - The bands are octaves centred on 31, 63, 125, 250, 500 Hz, 1, 2, 4, 8 and 16 kHz. Each is a band-pass about 6 dB per octave down on either side of its peak.
 - ALSA's "normal" band gain `0x3e96` gives unity at the band centre, and all ten at `0x3e96` with bypass 0 sum to flat within about 1 dB.
 
+- **The bypass and band gains are signed and simply add (Confirmed, run 16).** With band 4 (500 Hz) at `0x3e96` the 500 Hz region rose 5.0 dB with the bypass at `0x7fff` and fell 11.7 dB (a notch) with the bypass at `0x8001`; the bypass at `0x8001` alone changed nothing audible (a polarity flip); band 4 alone gave a band-pass, −2.1 dB at its centre and −15 to −28 dB well away from it. The emulator's EQ, driven by the band-4 coefficients from the driver's registry set, reproduces all four within 0.4 dB.
+- **`+0x2c` is a band's target gain and `+0x28` its current gain, which glides to the target by itself (Confirmed, run 16).** After `+0x28` = 0 and `+0x2c` = `0x3e96` were written, `+0x28` read `0x48` at once, `0x3783` 100 ms later and `0x3e96` by 200 ms. The emulator uses `+0x2c` directly, which is right once the glide ends.
+
 For an emulator driven by the Windows driver, a pass-through is exact; the band model above covers anything that programs the EQ itself.
 
 ### What the driver receives from the A3D library
@@ -460,9 +463,16 @@ PARM2 was always 0. PARM3 is `0xcfef` in the high half, and its low half varies 
 
 So Half-Life's second-half voices 4–29 are neither reflections nor A3D overflow. They carry their own gain and filter and start independently of A3D sources, which fits ordinary (non-3D) sound buffers played on wavetable voices once the ADB channels are busy (Hypothesis). The route table did not change during play, so their routes were set when the driver loaded.
 
-**Voice output routing (Strong, from the emulator).** A voice whose own ADB source (`0x40` + voice for the first half, `0x80` + voice for the second) appears in the route table plays only into that route, not into the half's mixed outputs (`WT0_32/33` and so on). `DSREG` (`0x0008` in each half) is not what selects this: it stays 0 in the A3D sessions where voices are routed to 3D inputs. Modelling it this way was what made Half-Life's 3D sounds come out in the right places in 86Box: before the change, voices feeding A3D sources also leaked into the plain stereo mix.
+**Voice output routing.** Each half has 32 per-voice sources (`0x40` + voice for the first half, `0x80` + voice for the second) and three mixed-output pairs, 32/33, 34/35 and 36/37 (`0x60`–`0x65`, `0xa0`–`0xa5`).
 
-**`DSREG` does not take a voice off the mixed outputs (Strong, from the driver's behaviour).** For DirectSound buffers played on wavetable voices, the driver sets the voice's `DSREG` bit as it starts the voice and routes only the half's mixed outputs, never the voice's own source: bank 0 in SiN on the real card (`0x1`, `0x3`, … `0xfff` as voices start), and every voice in Drakan in DirectSound mode under 86Box. An earlier model treated a set bit as "own source only", which silenced every such voice; in Drakan that was all the dialogue and most effects. What `DSREG` does do is still unknown.
+- **A voice whose own source is in the route table plays only into that route (Strong, from the emulator).** In A3D mode the driver feeds 3D inputs this way, at unity gain. Before the emulator did this, voices feeding A3D sources also leaked into the plain stereo mix in Half-Life.
+- **Otherwise `DSREG` (`0x0008` in each half, one bit per voice) picks the mixed-output pair: set = 32/33 (Confirmed).** Test-suite run 16 played DirectSound buffers with A3D closed. The driver put them on first-half voices 0–25, set their `DSREG` bits (`0x3ffffff`) as it started them, and routed only 32/33 (`0x60`/`0x61`) to the mixer. Clearing `DSREG` from the host under a playing voice silenced it (about 87 dB down); restoring it brought the voice back; setting every bit changed nothing.
+- **Clear = 36/37 (Strong).** Half-Life in A3D mode writes the second half's `DSREG` as 0 throughout, plays ordinary sounds on second-half voices 4–29 without routing them, and routes that half's 36/37 (`0xa4`/`0xa5`) to mixer inputs `0x5d`/`0x5e`. With those voices sent to 36/37, the replay's level matches the real recording whether or not they sound (within about 1.5 dB); with them silent, or on 32/33, the real card is about 6 dB louder than the model whenever they play.
+- **What feeds 34/35 is unknown.** No session routes it.
+
+An earlier model treated a set `DSREG` bit as "own source only", which silenced every DirectSound voice: in Drakan that was all the dialogue and most effects.
+
+**Which buffers get wavetable voices (Confirmed, runs 15 and 16).** With A3D open (the test program's default), DirectSound gets four hardware buffers, on ADB channels 3–6; every further buffer is mixed in software into channel 0. With A3D closed, as in a game's DirectSound mode, hardware buffers take ADB channels 1–14 and then first-half wavetable voices; 40 buffers all got hardware. DirectSound 3D buffers start on an ADB channel the same way.
 
 ### Game note: SiN's dropped dialogue and its "reverb engine" (Strong)
 
