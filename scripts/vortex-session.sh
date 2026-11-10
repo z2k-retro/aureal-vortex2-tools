@@ -29,6 +29,8 @@
 #   TRACES       session folders go here [~/traces]
 #   PARSER       vortex_trace.py, run on the log afterwards [../tools/vortex_trace.py]
 #   PERSIST=1    keep disk changes (drops -snapshot) [off]
+#   NOKVMINTX=1  deliver the card's interrupt through QEMU instead of KVM's fast path
+#                (x-no-kvm-intx=on): slower, but use it if the driver stops getting interrupts [off]
 #   VGA          cirrus; std (QEMU standard VGA, for SoftGPU); or voodoo3 for the
 #                emulated Voodoo3 (needs a QEMU built with the QEmu-3Dfx-Voodoo-3-Port
 #                device, set with QEMU=) [cirrus]
@@ -211,7 +213,7 @@ cmd_run() {
         -machine pc,hpet=off -accel "$ACCEL" -cpu pentium3 -m 256
         -rtc base=localtime -display sdl -nic none
         -drive "file=$DISK,format=qcow2,if=ide"
-        -device "vfio-pci,host=$HOSTDEV,x-no-mmap=on"
+        -device "vfio-pci,host=$HOSTDEV,x-no-mmap=on${NOKVMINTX:+,x-no-kvm-intx=on}"
         -trace vfio_region_write -trace vfio_region_read
         -msg timestamp=on -D "$dir/qemu-trace.log"
         -monitor stdio
