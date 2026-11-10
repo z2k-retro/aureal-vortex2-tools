@@ -45,7 +45,14 @@ DISK=${DISK:-$HOME/win98-qemu/win98.qcow2}
 HOSTDEV=${HOSTDEV:-0000:0c:01.0}
 EXTRA_CD=${EXTRA_CD:-}
 TRACES=${TRACES:-$HOME/traces}
-PARSER=${PARSER:-$(cd "$(dirname "$0")/../tools" && pwd)/vortex_trace.py}
+if [ -z "${PARSER:-}" ]; then
+    # next to the repo's tools/, or a clone in the home folder when this script is a copy
+    for p in "$(dirname "$0")/../tools/vortex_trace.py" "$(dirname "$0")/vortex_trace.py" \
+             "$HOME/aureal-vortex2-tools/tools/vortex_trace.py"; do
+        [ -f "$p" ] && { PARSER=$p; break; }
+    done
+    PARSER=${PARSER:-$HOME/aureal-vortex2-tools/tools/vortex_trace.py}
+fi
 PERSIST=${PERSIST:-0}
 VGA=${VGA:-cirrus}
 V3ROM=${V3ROM:-$HOME/roms/3k12sd.rom}
