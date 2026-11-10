@@ -124,6 +124,8 @@ The driver reaches the codec through `CODEC_IO` at `0x29188` (ALSA):
 
 A read is a write of the register number with bit 23 clear, followed by a read of `0x29188`; the returned word repeats the register number in bits 22–16 with the data below.
 
+**Vendor register `0x72` selects the driver's rear-inversion workaround (Strong).** The real codec returns `0x8000` from `0x72`, and the driver then reads `0x6e` and writes `0x0008` to it. A codec that returns 0 there (86Box before its fix) sends the driver down another path: it writes `0x0007` to `0x72`, never touches `0x6e`, and loads the Vortex EQ with every band's numerator and the bypass gain negated (bypass `0x8001` instead of `0x7fff`). Only the front path runs through the EQ, so the chip's rear outputs then carry the exact negative of the front. The registry names the setting `ST9708LA4RearInversion` (`HKLM\Software\Aureal\Vortex\AU8830\Customization`, 1 by default): presumably a STAC9708 revision whose rear DAC inverts, which bit 15 of `0x72` tells apart. The EQ coefficients themselves come from the registry (`…\AU8830\Equalizer`, `CoefSet0`, with the real card's signs), so the negation is the driver's own.
+
 Startup sequence, in order:
 
 1. Write register `0x00` (reset); read the vendor ID at `0x7c` and `0x7e`.
