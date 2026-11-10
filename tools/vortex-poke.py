@@ -382,10 +382,22 @@ def _wt_state(bar):
     adb = [c for c in range(32) if bar.rd(ADB_FIFO + 4 * c) & 0x10]
     return ds, wt, adb
 
+def _card_readable(bar):
+    """A card that is not decoding its memory window (VM not started yet, driver not loaded)
+    reads 0xffffffff everywhere. CHIP_CTRL never reads all ones on a running card."""
+    return bar.rd(0x2a00c) != 0xffffffff
+
 def _wait_steady(bar, note, what, cond, secs=6.0):
     """Wait until cond(ds, wt, adb) holds with the same state for secs seconds."""
     since, last, beat = None, None, time.time()
     while True:
+        if not _card_readable(bar):
+            since, last = None, None
+            if time.time() - beat > 10:
+                beat = time.time()
+                print(f'  {utc()} card reads all ones: VM not running or driver not loaded yet; waiting', flush=True)
+            time.sleep(0.5)
+            continue
         st = _wt_state(bar); key = (tuple(st[0]), tuple(st[1]), tuple(st[2]))
         if cond(*st) and key == last:
             if time.time() - since >= secs:
