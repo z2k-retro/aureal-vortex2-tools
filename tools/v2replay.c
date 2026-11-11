@@ -78,22 +78,48 @@ dma_index(void)
 static int
 dma_serve(uint32_t addr, uint8_t *buf, uint32_t len)
 {
-    while (dma_first < dma_n && dma_used[dma_first])
-        dma_first++;
-    for (size_t i = dma_first, tries = 0; i < dma_n && tries < 4096; i++) {
+    /* Search around the last record served (dma_cur), not from the first
+       unserved one: a fetch 86Box made that the replay never repeats would
+       otherwise pin the window at that record for the rest of the run. */
+    static size_t dma_cur;
+    size_t        lo = dma_cur > 16384 ? dma_cur - 16384 : 0;
+    size_t        hi = dma_cur + 65536 < dma_n ? dma_cur + 65536 : dma_n;
+
+    for (size_t i = lo; i < hi; i++) {
         if (dma_used[i])
             continue;
-        tries++;
         uint32_t ra, rl;
         memcpy(&ra, dma_log + dma_off[i], 4);
         memcpy(&rl, dma_log + dma_off[i] + 4, 4);
         if (ra == addr && rl == len) {
             memcpy(buf, dma_log + dma_off[i] + 8, len);
             dma_used[i] = 1;
+            dma_cur     = i;
             return 1;
         }
     }
-    return 0;
+    /* No exact match: the replay's timing made it fetch with different
+       boundaries. Take each byte from a nearby recorded fetch that covers
+       it (the guest memory at about that time). */
+    for (uint32_t b = 0; b < len;) {
+        uint32_t a = addr + b, n = 0;
+        for (size_t i = lo; i < hi; i++) {
+            uint32_t ra, rl;
+            memcpy(&ra, dma_log + dma_off[i], 4);
+            memcpy(&rl, dma_log + dma_off[i] + 4, 4);
+            if (a >= ra && a - ra < rl) {
+                n = rl - (a - ra);
+                if (n > len - b)
+                    n = len - b;
+                memcpy(buf + b, dma_log + dma_off[i] + 8 + (a - ra), n);
+                break;
+            }
+        }
+        if (!n)
+            return 0;
+        b += n;
+    }
+    return 1;
 }
 
 static void
