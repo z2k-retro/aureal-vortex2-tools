@@ -345,6 +345,8 @@ ALSA's code gives the register layout: for each ear an EQ filter and a crosstalk
 | 180° | off | −3.8 dB | −7.5 dB |
 | 270° | −1.8 dB | −10.5 dB | off |
 
+**The model reproduces it (Strong, replay of run 6).** Replaying run 6's register trace into the model with four-channel output (`v2replay -q`) gives, after removing the noise the replay feeds into the test's silent 2D buffer (which lands equally on all four outputs, as the 2D path should), rear levels relative to the dry source of −19.9 dB (60°, right), −10.7 dB (90°, right), −6.0 dB (135°, right), −3.7 and −7.5 dB (180°, left and right) and −10.4 dB (270°, left), with the opposite rear channel off: all within 0.4 dB of the table. The model's front output follows the real front-jack recording across the steps (no change from 0° to 90° within 0.5 dB, about 15 dB down at 135° against 14 dB on the card, off at 180°).
+
 So quad mode is a front/rear crossfade done by the driver with ordinary mixer gains; the chip needs no extra 3D hardware for it. In quad mode the driver gave out only 11 hardware 3D slots (14 down to 4) instead of 15. In run 6 the speaker type was satellites; the rear did not get its own canceller.
 
 **The EQ block (Confirmed, run 9, host writes).** The chip's EQ at `0x2b000` sits in the 2D path: mixer outputs 6/7 → EQ → mixer inputs 7/8 → front and rear outputs. The Windows driver leaves it transparent: every band gain is 0 and the bypass gain (`0x2b3d4` left, `0x2b3ec` right) is `0x7fff`. Switching it on from the host showed:

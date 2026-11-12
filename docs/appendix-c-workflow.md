@@ -103,6 +103,7 @@ Suites: no arguments runs the run-2 set; `v1`, `run3`, `run12`, `run13` and `run
 bin/v2replay TIMELINE                 # compare the timing-independent registers
 bin/v2replay -a -v -t 60 TIMELINE     # compare every read for the first minute, listing mismatches
 bin/v2replay -o out.raw TIMELINE      # also write the model's output (48 kHz, stereo, s16)
+bin/v2replay -q -o out.raw TIMELINE   # four channels instead (front L, front R, rear L, rear R)
 ```
 
 The trace holds no guest memory, so the replay feeds DMA a fixed noise pattern; the output shows how the chip routes and processes streams, not what was played. A session traced in 86Box instead (the device's register-trace setting) also records the fetched sample data, and `-d vortex2-dma.bin` plays that back, so the replay reproduces the emulator's audio exactly; `-s a6,a7` then writes one source pair (here 3D slice 0's outputs) instead of the mix, to hear each path on its own. With `-a`, position and status registers differ because the replay does not follow the guest's timing, and memory regions the driver never writes differ because they power up random; the rest should match.

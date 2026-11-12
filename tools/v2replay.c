@@ -18,6 +18,8 @@
  *     -d FILE      take the stream data from a vortex2-dma.bin written by the
  *                  86Box device (its trace option), so the output is the
  *                  audio the game played rather than noise
+ *     -q           write four channels (front left, front right, rear left,
+ *                  rear right) instead of front and rear mixed to stereo
  *     -s SRC[,SRC] write one ADB source (hex) instead of the mixed output,
  *                  e.g. -s a6,a7 for 3D slice 0 or -s 7e,7f for the EQ
  *
@@ -173,10 +175,10 @@ main(int argc, char **argv)
 {
     const char *outname = NULL, *dmaname = NULL;
     double      tmax    = 1e30;
-    int         all = 0, verbose = 0, opt, solo[2] = { -1, -1 };
-    const char *usage = "usage: v2replay [-o out.raw] [-t seconds] [-a] [-v] [-l] [-d dma.bin] [-s src[,src]] TIMELINE\n";
+    int         all = 0, verbose = 0, quad = 0, opt, solo[2] = { -1, -1 };
+    const char *usage = "usage: v2replay [-o out.raw] [-t seconds] [-a] [-v] [-l] [-d dma.bin] [-s src[,src]] [-q] TIMELINE\n";
 
-    while ((opt = getopt(argc, argv, "o:t:avld:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:t:avld:s:q")) != -1) {
         switch (opt) {
             case 'o': outname = optarg; break;
             case 't': tmax = atof(optarg); break;
@@ -184,6 +186,9 @@ main(int argc, char **argv)
             case 'v': verbose = 1; break;
             case 'l': show_log = 1; break;
             case 'd': dmaname = optarg; break;
+            case 'q':
+                quad = 1;
+                break;
             case 's':
                 solo[0] = (int) strtol(optarg, NULL, 16);
                 solo[1] = strchr(optarg, ',') ? (int) strtol(strchr(optarg, ',') + 1, NULL, 16) : solo[0];
@@ -237,7 +242,8 @@ main(int argc, char **argv)
     static uint32_t mism[MAX_REGS];
     char            line[256];
     float           out[V2_BLOCK * 4];
-    int16_t         pcm[V2_BLOCK * 2];
+    int16_t         pcm[V2_BLOCK * 4];
+    const int       nch = quad ? 4 : 2;
     const double    block_dt = V2_BLOCK / (double) V2_RATE;
     long            nw = 0, nr = 0, compared = 0, mismatches = 0;
 
@@ -267,12 +273,13 @@ main(int argc, char **argv)
                 const float *sl = solo[0] >= 0 ? v2_debug_source(c, solo[0]) : NULL;
                 const float *sr = solo[0] >= 0 ? v2_debug_source(c, solo[1]) : NULL;
                 for (int n = 0; n < V2_BLOCK; n++)
-                    for (int k = 0; k < 2; k++) {
-                        float v = sl ? (k ? sr[n] : sl[n]) : out[n * 4 + k] + out[n * 4 + 2 + k];
+                    for (int k = 0; k < nch; k++) {
+                        float v = sl ? (k & 1 ? sr[n] : sl[n])
+                                     : quad ? out[n * 4 + k] : out[n * 4 + k] + out[n * 4 + 2 + k];
                         int   s = (int) lrintf(v * 32768.0f);
-                        pcm[n * 2 + k] = (int16_t) (s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
+                        pcm[n * nch + k] = (int16_t) (s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
                     }
-                fwrite(pcm, sizeof pcm, 1, o);
+                fwrite(pcm, sizeof(int16_t), (size_t) V2_BLOCK * nch, o);
             }
         }
 
