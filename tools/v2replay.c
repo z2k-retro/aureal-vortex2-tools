@@ -82,8 +82,8 @@ dma_serve(uint32_t addr, uint8_t *buf, uint32_t len)
        unserved one: a fetch 86Box made that the replay never repeats would
        otherwise pin the window at that record for the rest of the run. */
     static size_t dma_cur;
-    size_t        lo = dma_cur > 16384 ? dma_cur - 16384 : 0;
-    size_t        hi = dma_cur + 65536 < dma_n ? dma_cur + 65536 : dma_n;
+    size_t        lo = dma_cur > 65536 ? dma_cur - 65536 : 0;
+    size_t        hi = dma_cur + 262144 < dma_n ? dma_cur + 262144 : dma_n;
 
     for (size_t i = lo; i < hi; i++) {
         if (dma_used[i])
