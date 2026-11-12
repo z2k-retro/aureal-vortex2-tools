@@ -112,6 +112,8 @@ Selected reset values of registers the driver uses early:
 
 ## AC'97 codec
 
+**CD audio goes through the codec ADC (Strong, Half-Life sessions).** At start-up the driver mutes every analog input of the codec's output mixer (`0x10`, `0x12`, `0x14`, `0x16` = `0x8008`, CD included), sets the record select to CD on both channels (`0x1a` = `0x0101`) and the record gain to `0x0808`, and routes ADB sources `0x70`/`0x71` (the codec's ADC, left and right) to mixer inputs `0x5a`/`0x59`, which feed mixers 6 and 7 at gain `0xfa`. So CD audio is digitised by the codec and mixed by the Vortex, and the Windows CD volume acts on those mixer inputs. The real card received the same `0x12` = `0x8008` write in every traced session. The overall CD level (record gain against the drive's analog output level) has not been measured.
+
 The SQ2500's analog side is a SigmaTel STAC9708/9711, AC'97 vendor ID `0x83847608` (Confirmed: read by the driver from codec registers `0x7c` = `0x8384` and `0x7e` = `0x7608`).
 
 The driver reaches the codec through `CODEC_IO` at `0x29188` (ALSA):
