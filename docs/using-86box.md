@@ -18,6 +18,7 @@ Windows builds are on the [releases page](https://github.com/z2k-retro/86Box/rel
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Mix rear channels into the stereo output | Off | The SQ2500 has a second (rear) output. 86Box plays stereo, so in quad mode the rear channels are lost unless this is on. Turn it on if you set the control panel to four speakers but listen in stereo |
+| CD audio input level | −12 dB | How loud the CD drive's analog audio reaches the card, against the codec's full scale. Real drives and cards varied; the default matches the music-to-game balance of Half-Life's current release. Move a step if CD music sounds too loud or too quiet against game sound |
 | Write diagnostic log | Off | Writes `vortex2.log` in the machine's folder: a status line every two seconds plus stream, routing and 3D-source events. Use it when reporting a problem |
 | Write register trace | Off | Writes `vortex2-trace.txt` (every register access, in the format of the real-card sessions) and `vortex2-dma.bin` (every block of sample data the chip fetched) in the machine's folder. `bin/v2replay -d` replays them offline into the model, reproducing the audio exactly, with any one source soloed. The files grow by tens of megabytes a minute, so turn it on only for a short run |
 
@@ -28,13 +29,14 @@ Windows builds are on the [releases page](https://github.com/z2k-retro/86Box/rel
 - The speaker crosstalk canceller for headphones, satellites and monitors, and the hardware EQ.
 - The wavetable voices the driver uses for reflections and extra sounds.
 - MIDI through the "Vortex AU8830 Wavetable" device. This is Aureal's software synthesiser running in the driver, so it sounds exactly as on the real card.
+- CD audio. On the SQ2500 the drive's analog cable feeds the codec, and the driver records it and mixes it digitally, so game soundtracks on audio CD tracks play, and the Windows CD volume control works as on a real card. In 86Box, put the game CD (a BIN/CUE with its audio tracks) in the emulated CD-ROM drive.
 - Sound Blaster Pro emulation in Windows DOS boxes, which Aureal's driver also does in software.
 
 ## Known limitations
 
 - **Sound Blaster emulation can freeze the machine at boot.** It reserves IRQ 5, DMA 1 and port 220h, and Windows will not let you change them. If Windows has put a PCI device on IRQ 5 (on the ASUS P2B-LS it was the USB controller), the machine can hang right after the startup sound. Disable "Vortex AU8830 Sound Blaster Pro Emulation" in Device Manager, or move the other device off IRQ 5. A real SQ2500 behaves the same way. For DOS games an emulated Sound Blaster 16 is the better choice anyway: the Vortex's Sound Blaster support only reaches SB Pro and only works inside Windows.
 - **Aureal's A3D splash screen** can crash PowerVR games when they start (Unreal on a Matrox m3D, for example). It is an interaction with PowerVR's start-up, not the sound card; turning the splash screen off (the `SplashScreen` value under `Software\Aureal\A3D` in the registry) fixes it.
-- Not emulated yet: recording and line-in capture, the game port and MPU-401 port, real-mode DOS outside Windows, and S/PDIF.
+- Not emulated yet: recording from the microphone or line in (only the CD input reaches the codec), the game port and MPU-401 port, real-mode DOS outside Windows, and S/PDIF.
 - Only the Windows 98 driver has been tested. Other driver versions and the Windows 2000/XP drivers may work but are untested.
 
 ## Reporting a problem
