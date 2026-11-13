@@ -85,7 +85,7 @@ The chip implements registers from `0x00000` to `0x2b44f`; the remaining 80 KB o
 | `17000–17fff` | `FIFO_GIRT` | `0x000DDABA` | A few words at setup |
 | `18000–1ffff` | A3D: 4 slices of `0x2000`, 4 sources each (see A3D engine) | Implemented words 0; gaps `0xDEADBABE` | Rewritten continuously during A3D only |
 | `20000–21fff` | Mixer: input volume current `0x20000` / target `0x21000`, output volume current `0x20800` / target `0x21800`; `MIX_ENIN` `0x21a00`, `MIX_SMP` `0x21c00`, routes `0x21e00`, `MIXER_SR` `0x21f00`, `MIXER_CLIP` `0x21f80` | Half `0x80` (= `VOL_MIN`, muted), half `0x002DDEAD` | In Stereo mode, input volumes at `0x202xx`/`0x212xx` ramp continuously (panning) |
-| `22000–23fff` | Includes `SPDIF_FLAGS` `0x2205c` | `0xff`, `0x00ffffff` | Set at startup |
+| `22000–23fff` | Parallel interface to the SQ3500's DSP (see the SQ3500 section); includes `0x2205c` (ALSA's `SPDIF_FLAGS`, more likely the interface's GPIO control) | `0xff`, `0x00ffffff` | Set at startup |
 | `24000–25fff` | Crosstalk canceller: EQ and cross-talk coefficient sets from `0x24200` (ALSA `au88x0_xtalk.c`) | Partly `0xDEADBABE` | Almost idle until A3D starts, then \~235 words per page change |
 | `26000–26fff` | Sample-rate converters: data `0x26000`/`0x26800`, routes `0x26c00`, parameters `0x26e00–0x26f80` (`CONVRATIO` `0x26e40`) | Mostly 0 | Heavy during WAV and A3D |
 | `27000–27fff` | DMA engines: WT DMA (`BUFBASE` `0x27000`, `CTRL` `0x27900`, `START` `0x27b00`, `STAT` `0x27d00`), ADB DMA (`BUFBASE` `0x27400`, `CTRL` `0x27a00`, `START` `0x27c00`, `STAT` `0x27e00`), `ENGINE_CTRL` `0x27ae8` | Mixed, includes `0xDEADBEEF` | Status registers read constantly during playback |
@@ -451,7 +451,7 @@ Five minutes of Half-Life play (session `20261031-203721-hl-play2`, interrupts a
 
 **DirectSound's advertised 3D buffer count depends on Sound Blaster emulation (Confirmed).** With SB emulation enabled in the Aureal settings, `AU30DOS.COM` (run from `AUTOEXEC.BAT`) initialises the chip before Windows: it leaves the chip control register (`0x2a00c`) with bit 24 set, the Windows driver reads that byte (`0x2a00f`) at start-up, and DirectSound reports 76 hardware 3D buffers. With SB emulation disabled, `AU30DOS.COM` stops with "ERROR #6: Sound Blaster Emulation disabled in Windows", the register is still at its reset value (`0x00303260`), the driver takes another start-up path, and DirectSound reports 16. Minerva's Max Out finds 76 mono 3D sources either way, so only the advertised number changes. Compare emulator and card with the same setting.
 
-**`0x22034` is read-only and reads `0xff` (Confirmed, five real traces).** At start-up the driver writes 0 there and reads it back; the real card returns `0xff` and the driver moves on. A register that holds its value sends the driver into a long write-and-read test (13,787 writes in 86Box before the fix). Minerva's Max Out then found 7 stereo 3D sources instead of 9. `0x2205c` (`SPDIF_FLAGS`) reads `0x138015` at start-up (`0x138014` in some sessions), and bit 0 stays set when it is written.
+**`0x22034` is read-only and reads `0xff` (Confirmed, five real traces); it is the driver checking for the SQ3500's DSP (Plausible, see the SQ3500 section).** At start-up the driver writes 0 there and reads it back; the real card returns `0xff` and the driver moves on. A register that holds its value sends the driver into a long write-and-read test (13,787 writes in 86Box before the fix). Minerva's Max Out then found 7 stereo 3D sources instead of 9. `0x2205c` (`SPDIF_FLAGS`) reads `0x138015` at start-up (`0x138014` in some sessions), and bit 0 stays set when it is written.
 
 **FIFO control readback on an idle channel (Confirmed, three real traces).** Written `0x41000`, it reads `0x41020` (0x20 = empty); written `0x42000`, it reads `0x42060`, so the card adds 0x40 whenever bit 13 is set. The driver's DirectSound path waits for 0x40 before setting the start bit (0x10): Minerva's streaming buffer never started in 86Box until the emulator returned it. The plain wave-out path just adds 0x10 to whatever it reads.
 
@@ -506,6 +506,33 @@ Read from the original `hl.exe` and `hw.dll` (and the shipped `a3dapi.dll`, Aure
 - **Game sound levels go through the A3D API.** `volume` (default 0.7) is applied in the engine's own mixer and also passed to the A3D renderer's main-volume call, which logs "not yet implemented in API". Non-positional sounds reach A3D as one stereo mix, scaled by `s_2dvolume` (default 0.88). Either way the driver sees the result, so a faithful card model reproduces it without knowing these values.
 - **Doppler is A3D's own default.** `s_doppler` defaults to 0, but the engine never passes it (or `s_rolloff`) to A3D: its globals call logs "not yet implemented for Doppler or Rolloff". Moving sources such as the tram therefore get A3D's default Doppler shift, which fits the pitch variation seen on the real card while the tram moves.
 - **A3D 2.0 geometry is on by default:** `s_geometry` 1, `s_reflect` 1, `s_occlude` 1 (`s_occfactor` 0.25), `s_refgain` 0.34, `s_refdelay` 4, `s_numpolys` 200, `s_verbwet` 0.15, `s_reverb` 1. Archived values in a `config.cfg` override these.
+
+### The SQ3500 daughterboard (not emulated)
+
+The SQ3500 is an SQ2500 with a DSP daughterboard. No SQ3500 has been traced, and none is to hand, so this section records what the SQ2500's traces and a privately shared register map (not redistributed) indicate, and where an emulation would attach. Treat it all as Plausible until an SQ3500 is traced.
+
+**What the DSP is.** The Vortex's parallel-interface block (`0x22000–0x23fff`) is unused on the SQ2500. The map describes it as a host port for an external DSP and a modem: a window of eight byte-wide DSP registers at `0x22020–0x2203c`, wait-state, DMA (16- or 24-bit words, optional throttling on a GPIO pin, optional polling of a transmit-empty flag before each write), reset, pin and state-machine registers at `0x22040–0x22058`, GPIO routing at `0x2205c` (DSP interrupt and DMA request on GPIO pins, a host-enable strobe on GPIO 1), and a 4 KB window at `0x23000` aliased to one data register, for downloading blocks to the DSP by CPU writes. The eight-register window, the 24-bit words, the transmit-empty flag and the host-enable strobe are the shape of the Motorola DSP56300 family's 8-bit host interface (HI08), so the daughterboard is most likely a 56300-family part. The routing has a destination for the interface (`0xa4`) and a sample-rate header for its DMA (header 21), and the interrupt status word has two bits for the DSP (bits 10 and 11 of `0x2a000`).
+
+**The SQ2500 driver probes for it at start-up (Confirmed in traces; reading Plausible).** Every traced boot does the same short sequence:
+
+| Access | Value | Reading |
+| --- | --- | --- |
+| write `0x22040` | `0x24`, later `0x1880` | interface wait states (`0x24` is the map's setting for Motorola parts) |
+| write `0x22044`, `0x22048`, `0x2204c` | 0 | 16-bit DMA, DMA off, interface reset |
+| write `0x22020` | `0x80`, then 0 | DSP register 0 (HI08's interface control register, whose bit 7 is the initialise bit) |
+| write `0x22034`, read it back | 0, reads `0xff` | DSP register 5 (a data register): nothing holds the value, so no DSP is fitted |
+| read/write `0x2205c` | `0x138015` / `0x138014` read, `0x13801d`, `0x1380dd` written | GPIO routing and pin values |
+
+So `0x22034` reading `0xff` is an empty bus, not a read-only register. That explains the finding above: a register that holds its value tells the driver a DSP is present, and it then spends thousands of writes trying to talk to it and sets aside resources for it (Minerva found 7 stereo 3D sources instead of 9).
+
+**Where an emulation would attach.** The 86Box device already returns `0xff` from the DSP window, which is the SQ2500. An SQ3500 option would add:
+
+1. a DSP56300-family core behind `0x22020–0x2203c` (the maintained open-source core is the one used by the gearmulator project, under the GPL v3);
+2. the interface's DMA, fed through routing destination `0xa4` and sample-rate header 21, and its CPU download window at `0x23000`;
+3. the DSP's interrupt and request lines through the GPIO routing at `0x2205c` to bits 10 and 11 of the interrupt status word;
+4. the DSP's firmware, which the SQ3500 driver presumably downloads, and traces of an SQ3500 to learn how the driver uses it.
+
+Items 1–3 can be built from the map; item 4 needs an SQ3500.
 
 ### Clocks, interrupts and DMA
 
