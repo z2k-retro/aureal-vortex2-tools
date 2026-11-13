@@ -530,9 +530,9 @@ So `0x22034` reading `0xff` is an empty bus, not a read-only register. That expl
 1. a DSP56300-family core behind `0x22020–0x2203c` (the maintained open-source core is the one used by the gearmulator project, under the GPL v3);
 2. the interface's DMA, fed through routing destination `0xa4` and sample-rate header 21, and its CPU download window at `0x23000`;
 3. the DSP's interrupt and request lines through the GPIO routing at `0x2205c` to bits 10 and 11 of the interrupt status word;
-4. the DSP's firmware, which the SQ3500 driver presumably downloads, and traces of an SQ3500 to learn how the driver uses it.
+4. the DSP's firmware, and how the driver uses it.
 
-Items 1–3 can be built from the map; item 4 needs an SQ3500.
+Items 1–3 can be built from the map. **The firmware ships with the retail driver:** the Windows 9x 4.06.2048 package installs `stratdsp` (17,419 bytes, version string `v1.13`, copied by `au30mmed.inf`). Its contents are DSP56300 machine code in big-endian 24-bit words (it opens, for example, with immediate writes to on-chip peripheral registers, the usual 56300 start-up), which supports the 56300 identification. Like the HRTF profiles, an emulation would load it from the user's own driver install rather than redistribute it. What it does, and how the driver drives it after the download, would need either static analysis of the driver's VxDs or traces of an SQ3500.
 
 ### Clocks, interrupts and DMA
 
