@@ -8,7 +8,13 @@ The Vortex 2 has a speaker crosstalk canceller at `0x24000–0x25fff` between th
 | Monitors | `Narrow` | 1.02 / 0.75 / 0.53, inverted, about 0.25 ms |
 | Headphones | `Pipe` | Pass-through |
 
-The register-level arithmetic of the canceller's filter sections is not decoded: host-side sweeps showed the sections are not a plain biquad cascade with any ordering or scale that was tried. Because only these three presets are ever loaded, the canceller can be emulated by its measured response instead. That is what the 86Box model does, and what these files provide.
+The register-level arithmetic of the canceller's filter sections is only partly decoded. Because only these three presets are ever loaded, the canceller can be emulated by its measured response instead. That is what the 86Box model does, and what these files provide.
+
+### Partial decode (Plausible)
+
+Aureal's description of the block, relayed by the author of a register map of the chip, gives it two 10th-order IIR filters per side built from second-order sections: an "EQ" filter and an "XT" filter, the XT filter preceded by a 32-stage ITD delay line (the control word at `0x24660` carries a 5-bit delay per side; the driver sets 13 samples for satellites). The sections are double-precision direct-form I biquads with error feedback, on a 16 × 16-bit multiplier and 40-bit accumulator (12.28); inputs and delayed inputs are 1.15, delayed outputs 2.14, and each state is held as a 4.12 upper and an x.14 lower word. The RAM holds, per section, five coefficient words and four state words (y1, y2 and two error words), ten EQ sections at `0x24200` and ten XT sections at `0x24368`, ten input gains at `0x244d0`, and a gain (k) and shift per filter per side at `0x24538`–`0x24554`.
+
+The driver's satellite preset fits that description. The same five sections are loaded for each side; every section's fifth word is zero, which is what a parallel (partial-fraction) form has (first-order numerators), not a cascade; the fifth XT section is empty; the first four input gains per side are just under 1 (2.14) and the fifth is 0; the EQ gain is positive with a shift of 1 and the XT gain negative with a shift of 0. Read as coefficients a1, a2, b0, b1 in 2.14 with poles 1 − a1 z⁻¹ − a2 z⁻² (all stable), the EQ sections summed in parallel give the same-side shape the model was fitted to, peaks and dips at the same frequencies, but only after adding a direct term of about 0.79 × the input to the gain-scaled sum: with it the shape matches the fitted filter to 0.67 dB rms from 150 Hz to 15 kHz (2.2 dB without). Where that term comes from in the hardware is not known. The XT sections do not yet decode: summed and scaled the same way, their shape falls off faster above 3 kHz than the fitted cross filter (5.4 dB rms), feed-forward or recursive. Open: the direct term, how k and the shift apply, and whether the XT path takes the other side's input or output.
 
 ## The model
 
