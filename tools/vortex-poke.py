@@ -16,6 +16,11 @@ timestamp (the same clock as qemu-trace.log) for alignment.
                                                  coefficients, one word at a time, 3 s each (~1.5 min)
   sudo ./vortex-poke.py xtident2 [--log FILE]    the same, re-arming the canceller after every change
                                                  (bit 0 of 0x24660 off then on, as the driver does)
+  sudo ./vortex-poke.py xtshift [--log FILE] [--hold SECS]
+                                                 run alongside 'A3DTEST click90' in a speaker mode: sweeps
+                                                 both EQ shift registers 0-7 with identical coefficients,
+                                                 twice (unit sections, then the driver's own), 3 s per step
+                                                 (about 1 minute); measure with xtshift_analyze.py
   sudo ./vortex-poke.py glidewatch [--log FILE] [--out FILE]
                                                  run alongside 'A3DTEST tcsweep': like tcsweep, but after
                                                  every target change reads the chip's *current* gain, filter,
@@ -124,6 +129,13 @@ def main():
         def note(**kw):
             kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
         xtident(bar, note, latch=(cmd == 'xtident2'))
+        return
+    if cmd == 'xtshift':
+        log = open(logpath, 'a')
+        def note(**kw):
+            kw['utc'] = utc(); line = json.dumps(kw); log.write(line + '\n'); log.flush(); print(line)
+        hold = float(sys.argv[sys.argv.index('--hold') + 1]) if '--hold' in sys.argv else 3.0
+        xtshift(bar, note, hold)
         return
     if cmd == 'eqsweep':
         log = open(logpath, 'a')
@@ -574,6 +586,68 @@ def xtident(bar, note, hold=3.0, latch=False):
     finally:
         restore()
         note(event='xi_restored')
+
+
+def xtshift_schedule(orig):
+    """The EQ shift sweep: identical input and coefficients, only the shift changes.
+
+    Pass A: every EQ section a unit gain (b0 only), crosstalk paths off, a small fixed K.
+    Pass B: the driver's own sections and crosstalk paths, K lowered so that shift 7
+            gives the level the driver's preset has (K_B * 2^7 = K_driver * 2^shift_driver),
+            so no step is louder than normal playback.
+    Both EQ shifts (left and right) are set together. A reference step (the driver's
+    preset, untouched) opens, separates and closes the passes."""
+    (kL, sL), (kR, sR) = XT_GAINS['eqL'], XT_GAINS['eqR']
+    xt_off = {XT_GAINS['xtL'][0]: 0, XT_GAINS['xtR'][0]: 0}
+    unit = {**xt_rows('eqL', [UNIT] * 5), **xt_rows('eqR', [UNIT] * 5)}
+    k_a = 0x0020                       # 1/512 of full scale in 2.14; shift 7 stays below clipping
+    sched = [('reference (driver preset)', {})]
+    for sh in range(8):
+        sched.append((f'A unit sections K={k_a:#06x} shift={sh}',
+                      {**unit, **xt_off, kL: k_a, kR: k_a, sL: sh, sR: sh}))
+    sched.append(('reference (driver preset)', {}))
+    def lowered(k, sh):                # 16-bit two's complement K, scaled down by 2^(7-sh)
+        v = k - 0x10000 if k & 0x8000 else k
+        return (v >> (7 - min(sh, 7))) & 0xffff
+    kbL, kbR = lowered(orig[kL], orig[sL]), lowered(orig[kR], orig[sR])
+    for sh in range(8):
+        sched.append((f'B driver sections K={kbL:#06x}/{kbR:#06x} shift={sh}',
+                      {kL: kbL, kR: kbR, sL: sh, sR: sh}))
+    sched.append(('reference (driver preset)', {}))
+    return sched
+
+
+def xtshift(bar, note, hold=3.0):
+    print('waiting for the guest click source at 90 degrees (run "A3DTEST click90" in Windows)...')
+    while not (bar.rd(ITD_TARGET) & 0xffff == 0x4600 and bar.rd(GAIN_TARGET) & 0xffff):
+        time.sleep(0.05)
+    time.sleep(1.0)
+    orig = {a: bar.rd(a) & 0xffff for a in range(*XT_SPAN, 4)}
+    ctrl = bar.rd(XT_CTRL)
+    gains = {f'{n}_{w}': hex(orig[a]) for n, (k, s) in XT_GAINS.items() for w, a in (('k', k), ('shift', s))}
+    note(event='xs_captured', words=len(orig), ctrl=hex(ctrl), gains=gains, hold=hold)
+    if not ctrl & 1 or all(orig[k] == 0 for k, _ in XT_GAINS.values()):
+        print('warning: the canceller looks off (headphone mode?). Set the A3D control panel to '
+              '2 speakers (satellites or monitors) and run click90 again.')
+    def restore():
+        for a, val in orig.items():
+            bar.wr(a, val)
+        xt_latch(bar, ctrl)
+    try:
+        for i, (name, writes) in enumerate(xtshift_schedule(orig)):
+            restore()
+            for a, val in writes.items():
+                bar.wr(a, val)
+            xt_latch(bar, ctrl)
+            watch = [a for n in ('eqL', 'eqR') for a in XT_GAINS[n]]
+            back = {hex(a): hex(bar.rd(a) & 0xffff) for a in watch}
+            note(event='xs_step', index=i, name=name, readback=back, ctrl=hex(bar.rd(XT_CTRL)))
+            time.sleep(hold)
+    except KeyboardInterrupt:
+        note(event='interrupted')
+    finally:
+        restore()
+        note(event='xs_restored')
 
 
 if __name__ == '__main__':

@@ -51,7 +51,21 @@ The driver reaches the registers both through BAR0 and through the BAR1 index/da
 | `codec TIMELINE` | AC'97 codec identity and register settings from a trace |
 | `clock` | Measures the card's sample clock against the host |
 
-`tools/vortex-poke.py` reads and writes registers from the host while the VM runs, through the card's `resource0` in sysfs. Host writes do not appear in the QEMU trace, so it logs each one with a UTC timestamp. Its sweeps are meant to run alongside particular `a3dtest` tests: `tcsweep` and `glidewatch` with `A3DTEST tcsweep` (the glide law in the reference came from `glidewatch`, which polls the chip's current registers every 100 µs after each target change), `xtsweep`, `xtident` and `xtident2` with `A3DTEST click90` (the crosstalk canceller), and `eqsweep` with `A3DTEST noise2d` (the EQ block). Each sweep puts back every word it changed.
+`tools/vortex-poke.py` reads and writes registers from the host while the VM runs, through the card's `resource0` in sysfs. Host writes do not appear in the QEMU trace, so it logs each one with a UTC timestamp. Its sweeps are meant to run alongside particular `a3dtest` tests: `tcsweep` and `glidewatch` with `A3DTEST tcsweep` (the glide law in the reference came from `glidewatch`, which polls the chip's current registers every 100 µs after each target change), `xtsweep`, `xtident`, `xtident2` and `xtshift` with `A3DTEST click90` (the crosstalk canceller), and `eqsweep` with `A3DTEST noise2d` (the EQ block). Each sweep puts back every word it changed.
+
+`xtshift` measures what the canceller's EQ shift register does to the level. The A3D control panel must be in a two-speaker mode (satellites or monitors), since headphone mode turns the canceller off. With the input and the coefficients held identical, it steps both EQ shifts (left and right together) through 0–7 twice, 3 s per step, re-arming the canceller after each change:
+
+- **Pass A:** unit sections (b0 only), crosstalk paths off, K = 0x0020.
+- **Pass B:** the driver's own sections and crosstalk paths, with K lowered so that shift 7 plays at the preset's normal level.
+
+A reference step (the untouched preset) opens, separates and closes the passes. If the shift is a plain power of two, each step is +6.02 dB. `tools/xtshift_analyze.py SESSION_DIR POKE_LOG` prints the median click peak and the RMS per channel and step, with the change from the previous step:
+
+```sh
+./scripts/vortex-session.sh run xtshift-sat          # with the a3dtest CD and results disk, as below
+#   in Windows: A3D control panel -> 2 speakers; then D:\A3DTEST.EXE click90
+sudo HOSTDEV=0000:0c:01.0 tools/vortex-poke.py xtshift --log xtshift.jsonl   # on the host, once click90 is playing
+tools/xtshift_analyze.py ~/traces/<stamp>-xtshift-sat xtshift.jsonl            # afterwards
+```
 
 ## The test program
 
