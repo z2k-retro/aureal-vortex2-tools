@@ -48,6 +48,6 @@ These are not in the repository, because they are not ours to distribute or are 
 
 ## Licence and credits
 
-GPL-2.0-or-later (see `LICENSE`), to match 86Box. The canceller model is a measurement of the card's response under Aureal's driver. The driver's direction table is not included; Appendix A explains how to read it out.
+GPL-2.0-or-later (see `LICENSE`), to match 86Box. The canceller model is a measurement of the card's response under Aureal's driver. The driver's direction table is included (`data/hrtf/`): the table as captured from a real SQ2500, and the OpenAL Soft HRTF set built from Aureal's "Ed's Ears" profile, which is the same table with lower elevations added; Appendix A explains how it was read out.
 
 Hardware, testing and direction: Z2k Retro. The tools, chip model and documentation were written with substantial help from Claude, Anthropic's AI model. Statements marked as measured were checked on a real SQ2500 by the methods in Appendix C; the rest come from the Linux driver or from the 86Box model's behaviour, as the reference says for each.

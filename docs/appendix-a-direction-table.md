@@ -2,7 +2,7 @@
 
 Aureal's Windows driver (4.06.2048) turns a direction into HRTF filter taps and an interaural delay (ITD) by looking them up in a table and interpolating. The A3D engine on the chip only runs the finished filters ([reference](reference.md#a3d-engine)), so this table is what gives the card its sound. An emulator that runs Aureal's driver gets it from the driver; anything that replaces the driver (an A3D wrapper such as DSOAL's, or a game port) needs it.
 
-The table's contents are Aureal's filter data and are not published here. This appendix describes its structure, and how anyone with a card and the driver can read it out for their own use, for example to make an A3D wrapper sound like the card.
+The table is in `data/hrtf/`: `vortex2_hrtf_grid_15deg.csv` is the table as read out of a real SQ2500 with the methods below (24 azimuths × elevations −45° to +75° plus straight up; 56 taps per ear, ITDs in samples), and `Aureal Vortex 2.mhr` is an OpenAL Soft HRTF set built with `tools/make_mhr.py` from Aureal's "Ed's Ears" profile file, which turned out to be the source of the driver's table and adds −60°, −75° and straight down (see the reference's section on the driver's HRTF profile files). This appendix describes the table's structure and how it was read out.
 
 ## What was measured
 
