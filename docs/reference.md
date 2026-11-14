@@ -516,7 +516,7 @@ The 4.06.2048 Windows 98 driver package is accompanied by `.hrtf` files ("Ed's E
 
 - A 56-byte header: the magic `HRTF`, version `0x00010000`, sample rate (48000, or 44000 in a second copy), a 16-byte GUID, flags (`0x101`, `0x102`, `0`: one per copy), and the grid: 24 azimuths and 11 elevations (15° steps, −75° to +75°), followed by a length-prefixed profile name and author.
 - Per copy, a left block then a right block, each 267 filters of 56 signed 16-bit taps (29,904 bytes): azimuth index (12 − azimuth/15) mod 24, times 11, plus (5 − elevation/15), then three extra entries: straight up (identical to the captured up entry), straight down, and a unit impulse.
-- After the taps, an ITD block of 16-bit values in 1/256-sample units, in the same order.
+- After the taps, a count word (534), a zero word, then 267 left-ear and 267 right-ear ITDs as 16-bit values in 1/256-sample units, in the same order as the filters; they match the ITDs captured from the driver to within 0.004 samples.
 - "Ed's Ears" has two identical copies (48000 and 44000); "Paul's Ears" has three copies of a different filter set (correlation about 0.05 with Ed's).
 
 How the driver chooses between profiles is not known. An emulator needs nothing from these (the emulated driver loads whichever it uses); a driver replacement such as the DSOAL fork could read them from the user's own installation.
